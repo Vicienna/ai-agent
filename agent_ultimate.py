@@ -90,7 +90,8 @@ def run_setup():
     set_key(ENV_FILE, "API_KEY", api_key)
     set_key(ENV_FILE, "API_PROVIDER", provider["name"])
     if choice == "3":
-        base_url = Prompt.ask("Base URL")
+        console.print("Contoh base URL: https://api.groq.com/v1 (tanpa /chat/completions)")
+        base_url = Prompt.ask("Masukkan base URL").strip().rstrip('/')
         set_key(ENV_FILE, "API_BASE_URL", base_url)
     else:
         set_key(ENV_FILE, "API_BASE_URL", provider["base"])
@@ -140,6 +141,14 @@ def load_config():
     CWD = Path.cwd()
 
 # ----------------------- API CLIENT -----------------------
+def normalize_api_url(base):
+    """Pastikan URL mengarah ke /chat/completions tanpa duplikasi."""
+    base = base.rstrip('/')
+    if base.endswith('/chat/completions'):
+        return base
+    else:
+        return f"{base}/chat/completions"
+
 def chat_completion(messages, tools=None, max_retries=3):
     api_key = os.getenv("API_KEY")
     base_url = os.getenv("API_BASE_URL")
@@ -164,9 +173,10 @@ def chat_completion(messages, tools=None, max_retries=3):
     session.mount("https://", adapter)
     session.mount("http://", adapter)
 
+    url = normalize_api_url(base_url)
     for attempt in range(max_retries):
         try:
-            resp = session.post(f"{base_url}/chat/completions", headers=headers, json=payload, timeout=120)
+            resp = session.post(url, headers=headers, json=payload, timeout=120)
             if resp.status_code != 200:
                 return {"error": f"HTTP {resp.status_code}: {resp.text}"}
             return resp.json()
@@ -389,7 +399,7 @@ tool_map = {
 
 # ----------------------- MAIN LOOP -----------------------
 def process_tool_calls(messages, tool_calls):
-    global active_project   # deklarasi global agar bisa mengubah active_project
+    global active_project
     new_msgs = []
     for tc in tool_calls:
         func_name = tc["function"]["name"]
@@ -415,13 +425,10 @@ def process_tool_calls(messages, tool_calls):
             if project:
                 t = threading.Thread(target=monitor_logs, args=(project,), daemon=True)
                 t.start()
-        elif func_name == "auto_stop":
-            # active_project sudah diubah di fungsi auto_stop, tapi kita bisa periksa di sini jika perlu
-            pass
     return new_msgs
 
 def run_agent():
-    global active_project, CWD  # (global CWD hanya untuk kejelasan)
+    global active_project
     load_config()
     model = os.getenv("MODEL", "meta-llama/llama-3.1-70b-instruct")
     SYSTEM_PROMPT = f"""Kamu AI Developer Agent di Termux. Dir: {CWD}
