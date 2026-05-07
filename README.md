@@ -1,182 +1,175 @@
-## 📄 `README.md`
+## 📃 `README.md`
 
 # 🤖 AI Agent Ultimate
 
-AI Agent yang berjalan di terminal dengan dukungan **multi‑penyedia API** (OpenAI, OpenRouter, Google, Custom) dan integrasi **GitHub**. Dapat membuat proyek dari nol, mengelola file, menjalankan perintah shell, serta melakukan push/pull otomatis ke GitHub. Dilengkapi dengan **Setup Wizard** interaktif sehingga pengguna tinggal jalankan, pilih penyedia, masukkan API key, dan langsung siap digunakan.
+Agen AI terminal dengan dukungan **multi‑provider** (OpenAI, OpenRouter, Custom), integrasi **GitHub** via `gh` CLI, dan kemampuan membuat proyek pemrograman lengkap secara otomatis. Cocok untuk Ubuntu, Termux, dan lingkungan Linux lainnya.
 
----
+![Agent Screenshot](https://via.placeholder.com/800x400?text=AI+Agent+Ultimate)
 
-## ✨ Fitur Unggulan
+## 🌟 Fitur Utama
 
-- 🧠 **Multi‑API**: Bisa pakai OpenAI, OpenRouter (akses puluhan model seperti Llama, Gemini, Claude), atau endpoint kustom apa pun.
-- 🔧 **Tools Lengkap**: Membaca, menulis, mengedit file; membuat folder proyek; menjalankan perintah shell (`npm init`, `git init`, dll.).
-- 🐙 **GitHub Terintegrasi**: Buat repo, clone, push, pull, commit otomatis.
-- 🧭 **Setup Wizard**: Saat pertama kali dijalankan, akan memandu memilih penyedia, memasukkan API key, memilih model, dan menghubungkan GitHub. Semua konfigurasi disimpan di file `.env`.
-- 🎨 **UI Keren**: Warna‑warni panel, syntax highlighting, dan output tool yang jelas berkat pustaka `rich`.
-- 📱 **Multi‑Platform**: Bisa dijalankan di Ubuntu, Debian, Termux (Android), Windows (WSL), dan macOS.
+- 🔌 **Multi‑API**: Pilih OpenAI, OpenRouter (bisa akses model Google, Meta, dll.), atau endpoint custom.
+- 🛠️ **Setup Wizard**: Konfigurasi interaktif saat pertama dijalankan (API key, model, GitHub).
+- 📁 **Manajemen File**: Baca, tulis, edit file langsung dari percakapan.
+- 🐧 **Shell Command**: Jalankan perintah shell (`git`, `npm`, `pip`, dll.) dengan konfirmasi.
+- 🐙 **GitHub Terintegrasi**:
+  - Buat repository baru
+  - Push perubahan
+  - Clone repository
+  - Semua lewat `gh` CLI (tidak perlu token manual)
+- ⏹️ **Fitur Cancel**: Tekan `Ctrl+C` untuk membatalkan AI yang sedang berpikir atau tool yang sedang berjalan.
+- 🔄 **Auto‑Retry**: Jika koneksi terputus (misal di Termux), agen otomatis mencoba ulang hingga 3 kali.
+- 🧹 **Clear Screen**: Tampilan selalu bersih setiap kali agen dijalankan.
+- 📦 **Ringan**: Hanya membutuhkan `requests`, `rich`, `gitpython`, `python-dotenv` – tanpa kompilasi Rust atau library berat.
 
----
+## 📋 Persyaratan
 
-## 📦 Persyaratan
+- **Python** 3.8 atau lebih baru
+- **Git** (`pkg install git` di Termux)
+- **GitHub CLI** (`gh`) – install dengan `pkg install gh` lalu login: `gh auth login`
+- (Opsional) **Node.js**, **npm**, dll. sesuai proyek yang ingin dibuat
 
-- Python 3.8 atau lebih baru
-- Git (opsional, untuk fitur repositori lokal)
-- Node.js (opsional, untuk proyek Node.js)
-- `gh` CLI (opsional, jika tidak pakai Personal Access Token)
-- Koneksi internet
-
----
-
-## 🚀 Panduan Instalasi & Setup
-
-### 1. Clone Repo atau Unduh Kode
+## 🚀 Instalasi
 
 ```bash
-git clone https://github.com/Vicienna/ai-agent.git
+# 1. Clone repositori ini atau simpan script agent_ultimate.py
+git clone https://github.com/username/ai-agent-ultimate
 cd ai-agent-ultimate
-```
 
-Atau cukup unduh file `agent_ultimate.py` dan simpan di folder yang kamu inginkan.
+# 2. Install dependensi
+pip install requests rich python-dotenv gitpython
 
-### 2. Instal Dependensi
-
-#### Di Ubuntu / Debian / WSL
-
-```bash
-sudo apt update && sudo apt install python3 python3-pip git gh nodejs npm -y
-pip install openai rich gitpython PyGithub python-dotenv
-```
-
-#### Di Termux (Android)
-
-```bash
-pkg update && pkg upgrade
-pkg install python git gh nodejs-lts
-pip install openai rich gitpython PyGithub python-dotenv
-```
-
-*Catatan: Jika ada masalah dengan `pip` di Termux, jalankan `pip install --extra-index-url https://termux-user-repository.github.io/pypi/ nama-paket` untuk paket tertentu.*
-
-#### Di macOS
-
-```bash
-brew install python git gh node
-pip3 install openai rich gitpython PyGithub python-dotenv
-```
-
-### 3. Siapkan API Key
-
-Kamu akan memerlukan API key dari penyedia AI pilihanmu:
-
-- **OpenRouter** (rekomendasi – bisa akses banyak model): [openrouter.ai/keys](https://openrouter.ai/keys)
-- **OpenAI**: [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
-- **Google Gemini** (via OpenRouter dengan ID `google/gemini-2.0-flash-001`)
-- **Custom**: penyedia lain yang kompatibel dengan API OpenAI (mis. Mistral, Groq, dll.)
-
-**Catatan**: jangan bagikan API key‑mu. Simpan aman.
-
-### 4. Jalankan Agent
-
-```bash
+# 3. Jalankan
 python agent_ultimate.py
 ```
 
-### 5. Ikuti Setup Wizard
+Saat pertama dijalankan, **Setup Wizard** akan muncul dan memandu Anda mengisi:
+- Penyedia API (OpenAI / OpenRouter / Custom)
+- API key (dengan link langsung)
+- Model AI
+- Koneksi GitHub
+- Direktori kerja (opsional)
 
-Saat pertama kali dijalankan, agent akan menampilkan **Setup Wizard**:
+Semua pengaturan disimpan di file `.env` (tidak akan ditampilkan ke publik).
 
-1. **Pilih Penyedia API**  
-   - `1` untuk OpenAI  
-   - `2` untuk OpenRouter  
-   - `3` untuk Custom (masukkan base URL sendiri)  
+## ⚙️ Konfigurasi
 
-2. **Masukkan API Key** – wizard akan menampilkan link untuk mendapatkan key dan kamu tinggal paste.
-
-3. **Pilih Model**  
-   - Untuk OpenRouter: Llama 3.1 70B, Gemini 2.0 Flash, Claude 3.5 Sonnet, dll.  
-   - Untuk OpenAI: gpt-4o, gpt-4-turbo, dll.  
-   - Atau ketik manual ID model.
-
-4. **Hubungkan GitHub (Opsional)**  
-   - Pilih mau pakai Personal Access Token atau `gh` CLI.  
-   - Jika pakai token, masukkan token‑nya. Agent akan memvalidasi.
-
-5. **Tentukan Direktori Kerja (Opsional)** – biarkan kosong untuk direktori saat ini.
-
-Setelah wizard selesai, semua pengaturan disimpan di file `.env`. Agent langsung siap digunakan.
-
----
-
-## 💬 Cara Menggunakan
-
-Setelah masuk ke mode chat, kamu bisa memberikan instruksi dengan bahasa natural (Indonesia atau Inggris). Contoh:
+File `.env` berisi:
 
 ```
-▸ Buatkan REST API Express untuk Discord bot, dengan endpoint /ping dan /guilds.
-   Simpan di folder discord-bot, inisialisasi npm, dan push ke repo GitHub.
+API_KEY=sk-or-v1-...
+API_PROVIDER=OpenRouter (akses Google, Meta, dll.)
+API_BASE_URL=https://openrouter.ai/api/v1
+MODEL=meta-llama/llama-3.1-70b-instruct
+GITHUB_TOKEN=... (opsional jika sudah pakai gh)
+WORK_DIR=... (opsional)
 ```
 
-Agent akan otomatis:
+Untuk mengulangi setup, cukup hapus file `.env` lalu jalankan ulang agen.
 
-- Membuat folder proyek
-- Menjalankan `npm init -y` dan `npm install express`
-- Menulis file `index.js`, `package.json` (jika perlu)
-- Membuat repo GitHub
-- Menghubungkan git remote
-- Commit dan push perubahan
+## 📖 Penggunaan
 
-Lanjutkan pengembangan dengan perintah seperti:
+Setelah masuk ke antarmuka agen, cukup ketik instruksi seperti biasa:
 
 ```
-▸ Tambahkan endpoint /commands yang mengembalikan daftar perintah bot.
+▸ Buatkan REST API Express untuk Discord bot, lengkap dengan endpoint /ping, /servers, lalu push ke repo GitHub bernama discord-api.
 ```
 
-Agent akan membaca file yang ada, mengeditnya, lalu commit & push.
+Agen akan:
+1. Membuat folder proyek (`discord-api`)
+2. Menjalankan `npm init -y` dan `npm install express`
+3. Menulis file `index.js`, `package.json`, dll.
+4. Membuat repository GitHub `discord-api`
+5. Mengatur remote origin
+6. Commit dan push seluruh perubahan
 
-**Perintah singkat lain yang bisa digunakan:**
+Untuk mengembangkan proyek yang sudah ada, cukup arahkan agen ke direktori proyek dan berikan instruksi edit:
 
-| Perintah | Fungsi |
-|----------|--------|
-| `exit` / `quit` / `keluar` | Keluar dari agent |
-| `ls` / `list` | Lihat isi direktori kerja |
-| `ke folder <nama>` | Pindah direktori kerja |
-| `baca <file>` | Tampilkan isi file |
+```
+▸ Masuk ke folder discord-api
+▸ Tambahkan endpoint /moderation untuk ban user
+```
+
+Agen akan membaca file, mengeditnya, lalu commit & push.
+
+### Perintah Khusus
+
+| Perintah | Keterangan |
+|----------|------------|
+| `exit` / `quit` / `keluar` | Keluar dari agen |
+| `Ctrl+C` saat AI berpikir | Batalkan permintaan terakhir |
+| `Ctrl+C` saat tool berjalan | Batalkan tool (agen melanjutkan ke langkah berikutnya) |
+
+## 🎯 Model AI yang Didukung
+
+### OpenAI
+- gpt-4o
+- gpt-4-turbo
+- gpt-3.5-turbo
+- Custom
+
+### OpenRouter (mencakup)
+- meta-llama/llama-3.1-70b-instruct
+- meta-llama/llama-3.1-8b-instruct
+- google/gemini-2.0-flash-001
+- anthropic/claude-3.5-sonnet
+- openai/gpt-4o
+- Custom
+
+### Custom
+Masukkan ID model dan base URL sendiri (Mistral, Groq, DeepSeek, dll.) – semua endpoint yang kompatibel dengan API OpenAI dapat digunakan.
+
+## 🔧 Troubleshooting
+
+### Koneksi Terputus (`ConnectionResetError`)
+Agen sudah dilengkapi auto-retry hingga 3 kali dengan jeda eksponensial. Jika masih gagal, periksa koneksi internet atau coba ganti penyedia API.
+
+### API Key Salah (`401 User not found`)
+- Pastikan API key sesuai dengan provider yang dipilih.
+- Untuk OpenRouter, key diawali `sk-or-v1-...`.
+- Untuk OpenAI, key diawali `sk-...`.
+
+### GitHub Tidak Terhubung
+- Jalankan `gh auth login` di terminal.
+- Atau set environment variable `GITHUB_TOKEN` dengan personal access token.
+
+### Storage Penuh di Termux
+- Bersihkan cache: `pip cache purge && pkg clean`
+- Gunakan script ini karena tidak memerlukan kompilasi (tidak butuh Rust/`jiter`/`PyGithub`).
+
+## 📁 Struktur Proyek
+
+```
+ai-agent-ultimate/
+├── agent_ultimate.py   # Script utama
+├── .env                # Konfigurasi (auto-generated, jangan di-commit)
+└── README.md           # Dokumentasi ini
+```
+
+## 🧪 Contoh Skenario Lengkap
+
+1. **Buat proyek baru**
+   ```
+   ▸ Buatkan REST API Python FastAPI dengan endpoint /status dan /users, push ke repo fastapi-users
+   ```
+2. **Update proyek yang sudah ada**
+   ```
+   ▸ Masuk ke folder fastapi-users
+   ▸ Tambahkan validasi email di endpoint /users
+   ▸ Push perubahannya
+   ```
+3. **Clone dan kerjakan proyek dari GitHub**
+   ```
+   ▸ Clone repo https://github.com/teman/laravel-blog
+   ▸ Ganti koneksi database di .env jadi pgsql
+   ▸ Push perubahan
+   ```
+
+## 🙏 Kredit
+
+Dibuat dengan ❤️ untuk produktivitas maksimal di terminal.  
+Menggunakan [Rich](https://github.com/Textualize/rich) untuk UI terminal yang indah, dan [gh CLI](https://cli.github.com/) untuk integrasi GitHub tanpa token.
 
 ---
 
-## 🔁 Mengulang Setup
-
-Jika kamu ingin mengganti penyedia, model, atau konfigurasi lainnya:
-
-1. Hapus file `.env` yang ada di folder yang sama dengan script.
-2. Jalankan ulang `python agent_ultimate.py`.
-3. Wizard akan muncul kembali.
-
----
-
-## 🛠️ Troubleshooting
-
-### `gh` tidak bisa login di Termux
-- Gunakan opsi **Paste an authentication token** saat `gh auth login`.
-
-### Error `pip` di Termux
-- Coba gunakan indeks tambahan:  
-  ```bash
-  pip install nama-paket --extra-index-url https://termux-user-repository.github.io/pypi/
-  ```
-
-### Model tidak ditemukan (OpenRouter)
-- Pastikan ID model benar, contohnya `meta-llama/llama-3.1-70b-instruct`. Cek listing model di [openrouter.ai/models](https://openrouter.ai/models).
-
-### Token GitHub tidak valid
-- Pastikan token miliki scope (biasanya `repo` dan `workflow`). Atau gunakan `gh auth login` untuk kemudahan.
-
----
-
-## 📝 Lisensi
-
-MIT – silakan gunakan dan modifikasi sesuai kebutuhan.
-
----
-
-**Selamat ngoding bareng AI!** 🚀
+**Siap untuk coding? Jalankan agen dan ucapkan perintah pertama Anda!** 🚀
