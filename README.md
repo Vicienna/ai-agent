@@ -33,8 +33,8 @@ Agen AI terminal dengan dukungan **multi‑provider** (OpenAI, OpenRouter, Custo
 
 ```bash
 # 1. Clone repositori ini atau simpan script agent_ultimate.py
-git clone https://github.com/username/ai-agent-ultimate
-cd ai-agent-ultimate
+git clone https://github.com/Vicienna/ai-agent
+cd ai-agent
 
 # 2. Install dependensi
 pip install requests rich python-dotenv gitpython
