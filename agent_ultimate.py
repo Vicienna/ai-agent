@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
-AI Agent Ultimate – Auto Update + Auto Run + Auto Fix Error/Debugging
-Multi-Provider, GitHub via gh CLI, Tmux session manager.
-Prompt selalu muncul, monitor error di background.
+AI Agent Ultimate – Auto Update + Auto Run + Auto Fix + Log Panel + Git Identity Fix
+Multi-Provider, GitHub via gh CLI, Tmux session manager, log proyek tampil di terminal.
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -46,6 +45,7 @@ def password_prompt(prompt_text="Password: "):
 console = Console()
 ENV_FILE = Path(__file__).parent / ".env"
 CWD = Path.cwd()
+active_project = None   # menyimpan nama proyek yang sedang berjalan
 
 # ----------------------- AUTO UPDATE -----------------------
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Vicienna/ai-agent/main/agent_ultimate.py"
@@ -187,24 +187,54 @@ def check_github():
     except:
         return False
 
+def ensure_git_identity():
+    """Mengatur user.email dan user.name lokal jika belum ada."""
+    try:
+        repo = git.Repo(CWD)
+        reader = repo.config_reader()
+        if not reader.has_option("user", "email") or not reader.has_option("user", "name"):
+            # Coba ambil dari konfigurasi global gh
+            res = subprocess.run(["gh", "api", "user"], capture_output=True, text=True)
+            if res.returncode == 0:
+                user_data = json.loads(res.stdout)
+                email = user_data.get("email", "user@example.com")
+                name = user_data.get("name", user_data.get("login", "User"))
+            else:
+                email = "user@example.com"
+                name = "AI Agent User"
+            writer = repo.config_writer()
+            writer.set_value("user", "email", email)
+            writer.set_value("user", "name", name)
+            writer.release()
+            console.print(f"[dim]Git identity diset: {name} <{email}>[/]")
+    except Exception as e:
+        console.print(f"[yellow]⚠ Gagal mengatur identitas Git: {e}[/]")
+
 def github_create_repo(name, private=False, description=""):
+    ensure_git_identity()  # Pastikan identitas ada sebelum commit
     cmd = ["gh", "repo", "create", name, "--push"]
     if private: cmd.append("--private")
     else: cmd.append("--public")
     if description: cmd.extend(["-d", description])
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, cwd=CWD)
-        return res.stdout.strip() or f"Repo {name} dibuat."
+        output = res.stdout.strip() or f"Repo {name} dibuat."
+        # Perbaiki remote origin setelah create (kadang --push gagal set remote)
+        subprocess.run(["git", "remote", "remove", "origin"], capture_output=True, cwd=CWD)
+        subprocess.run(["git", "remote", "add", "origin", f"https://github.com/{os.getenv('GITHUB_USER', '')}/{name}.git"], capture_output=True, cwd=CWD)
+        return output
     except Exception as e:
         return f"ERROR: {e}"
 
 def github_push(commit_msg="Update from AI Agent"):
     try:
+        ensure_git_identity()
         repo = git.Repo(CWD)
         if repo.is_dirty(untracked_files=True):
             repo.git.add(A=True)
             repo.index.commit(commit_msg)
-            subprocess.run(["git", "push", "origin", "HEAD"], check=True, capture_output=True, cwd=CWD)
+            # Push with force if needed (hanya untuk branch main yang belum ada upstream)
+            subprocess.run(["git", "push", "-u", "origin", "HEAD", "--force"], check=True, capture_output=True, cwd=CWD)
             return f"✅ Pushed: {commit_msg}"
         return "Tidak ada perubahan."
     except Exception as e:
@@ -224,17 +254,23 @@ LOG_DIR = CWD / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 def auto_run(command, project_name):
+    global active_project
     # stop existing session if any
     subprocess.run(["tmux", "kill-session", "-t", project_name], capture_output=True)
     log_file = LOG_DIR / f"{project_name}.log"
+    # buat session baru, jalankan command, pipe ke log
     subprocess.run([
         "tmux", "new-session", "-d", "-s", project_name,
         f"bash -c '{command} 2>&1 | tee {log_file}'"
     ])
+    active_project = project_name
     return f"Proyek {project_name} dijalankan. Log: {log_file}"
 
 def auto_stop(project_name):
+    global active_project
     subprocess.run(["tmux", "kill-session", "-t", project_name], capture_output=True)
+    if active_project == project_name:
+        active_project = None
     return f"Sesi {project_name} dihentikan."
 
 # ----------------------- AUTO FIX / MONITOR -----------------------
@@ -244,21 +280,40 @@ def monitor_logs(project_name):
     log_file = LOG_DIR / f"{project_name}.log"
     if not log_file.exists():
         return
-    # ensure file exists before monitoring
+    last_size = 0
     while True:
-        time.sleep(1)
+        time.sleep(2)
         if not log_file.exists():
             continue
-        current_size = log_file.stat().st_size
-        if current_size == 0:
-            continue
-        # read entire file and look for errors
+        try:
+            current_size = log_file.stat().st_size
+            if current_size > last_size:
+                with open(log_file, 'r') as f:
+                    f.seek(last_size)
+                    new_content = f.read()
+                last_size = current_size
+                if "Traceback" in new_content or "Error" in new_content or "error" in new_content:
+                    error_queue.put((project_name, new_content))
+        except:
+            pass
+
+# ----------------------- LOG PANEL HELPER -----------------------
+def show_log_panel(project_name, lines=10):
+    """Tampilkan panel berisi log terbaru dari proyek aktif."""
+    if not project_name:
+        return
+    log_file = LOG_DIR / f"{project_name}.log"
+    if not log_file.exists():
+        return
+    try:
         with open(log_file, 'r') as f:
-            content = f.read()
-        if "Traceback" in content or "Error" in content or "error" in content:
-            # send only new errors (not previously sent)
-            error_queue.put((project_name, content))
-        time.sleep(2)  # check every 2 seconds
+            all_lines = f.readlines()
+        last_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
+        content = "".join(last_lines).rstrip()
+        if content:
+            console.print(Panel(content, title=f"📋 Log [{project_name}]", border_style="blue", height=min(10, len(last_lines)+2)))
+    except Exception as e:
+        console.print(f"[yellow]Gagal membaca log: {e}[/]")
 
 # ----------------------- TOOLS -----------------------
 def change_directory(path):
@@ -339,7 +394,6 @@ tool_map = {
 
 # ----------------------- MAIN LOOP -----------------------
 def process_tool_calls(messages, tool_calls):
-    """Eksekusi tool calls dan kembalikan list tambahan messages."""
     new_msgs = []
     for tc in tool_calls:
         func_name = tc["function"]["name"]
@@ -367,11 +421,14 @@ def process_tool_calls(messages, tool_calls):
                 t = threading.Thread(target=monitor_logs, args=(project,), daemon=True)
                 t.start()
         elif func_name == "auto_stop":
-            # optional: stop monitor? tidak perlu karena monitor akan berhenti jika session mati
-            pass
+            project = args.get("project_name")
+            if project == active_project:
+                global active_project
+                active_project = None
     return new_msgs
 
 def run_agent():
+    global active_project
     load_config()
     model = os.getenv("MODEL", "meta-llama/llama-3.1-70b-instruct")
     SYSTEM_PROMPT = f"""Kamu AI Developer Agent di Termux. Dir: {CWD}
@@ -392,16 +449,15 @@ Gunakan bahasa Indonesia ramah."""
     console.print(Panel.fit(
         f"[bold cyan]● AI Agent Ultimate[/]\n"
         f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}\n"
-        f"[dim]Fitur: Auto Update | Auto Run | Auto Fix[/]",
+        f"[dim]Fitur: Auto Update | Auto Run | Auto Fix | Log Panel[/]",
         border_style="bright_blue"))
 
     while True:
-        # Proses error dari queue (auto fix) TERLEBIH DAHULU sebelum prompt
+        # Proses error dari queue (auto fix) SEBELUM prompt
         try:
             project, err_text = error_queue.get_nowait()
             console.print(Panel(f"[bold red]🐛 Error terdeteksi di {project}![/]\n{err_text[:500]}", title="Auto Monitor"))
             messages.append({"role": "user", "content": f"ERROR terdeteksi di proyek {project}:\n{err_text}\nPerbaiki dan restart."})
-            # Proses langsung (tanpa input user)
             while True:
                 try:
                     resp = chat_completion(messages, tools_spec)
@@ -419,6 +475,8 @@ Gunakan bahasa Indonesia ramah."""
                     if msg.get("content"):
                         console.print(Panel(Markdown(msg["content"]), title="🤖 AI (Auto Fix)", border_style="green"))
                     break
+            # Tampilkan log proyek setelah auto-fix
+            show_log_panel(active_project)
         except queue.Empty:
             pass
 
@@ -435,7 +493,6 @@ Gunakan bahasa Indonesia ramah."""
 
         messages.append({"role": "user", "content": user_input})
 
-        # Proses respons AI
         while True:
             try:
                 resp = chat_completion(messages, tools_spec)
@@ -454,6 +511,9 @@ Gunakan bahasa Indonesia ramah."""
                 if msg.get("content"):
                     console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
                 break
+
+        # Tampilkan log proyek setelah respons AI
+        show_log_panel(active_project)
 
 if __name__ == "__main__":
     run_agent()
