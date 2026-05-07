@@ -1,6 +1,5 @@
 ## 📄 `README.md`
 
-```markdown
 # 🤖 AI Agent Ultimate
 
 AI Agent yang berjalan di terminal dengan dukungan **multi‑penyedia API** (OpenAI, OpenRouter, Google, Custom) dan integrasi **GitHub**. Dapat membuat proyek dari nol, mengelola file, menjalankan perintah shell, serta melakukan push/pull otomatis ke GitHub. Dilengkapi dengan **Setup Wizard** interaktif sehingga pengguna tinggal jalankan, pilih penyedia, masukkan API key, dan langsung siap digunakan.
