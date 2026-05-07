@@ -32,7 +32,7 @@ AI Agent yang berjalan di terminal dengan dukungan **multi‑penyedia API** (Ope
 ### 1. Clone Repo atau Unduh Kode
 
 ```bash
-git clone https://github.com/username/ai-agent-ultimate.git
+git clone https://github.com/Vicienna/ai-agent.git
 cd ai-agent-ultimate
 ```
 
