@@ -193,7 +193,6 @@ def ensure_git_identity():
         repo = git.Repo(CWD)
         reader = repo.config_reader()
         if not reader.has_option("user", "email") or not reader.has_option("user", "name"):
-            # Coba ambil dari konfigurasi global gh
             res = subprocess.run(["gh", "api", "user"], capture_output=True, text=True)
             if res.returncode == 0:
                 user_data = json.loads(res.stdout)
@@ -211,7 +210,7 @@ def ensure_git_identity():
         console.print(f"[yellow]⚠ Gagal mengatur identitas Git: {e}[/]")
 
 def github_create_repo(name, private=False, description=""):
-    ensure_git_identity()  # Pastikan identitas ada sebelum commit
+    ensure_git_identity()
     cmd = ["gh", "repo", "create", name, "--push"]
     if private: cmd.append("--private")
     else: cmd.append("--public")
@@ -219,7 +218,7 @@ def github_create_repo(name, private=False, description=""):
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, cwd=CWD)
         output = res.stdout.strip() or f"Repo {name} dibuat."
-        # Perbaiki remote origin setelah create (kadang --push gagal set remote)
+        # perbaiki remote origin setelah create
         subprocess.run(["git", "remote", "remove", "origin"], capture_output=True, cwd=CWD)
         subprocess.run(["git", "remote", "add", "origin", f"https://github.com/{os.getenv('GITHUB_USER', '')}/{name}.git"], capture_output=True, cwd=CWD)
         return output
@@ -233,7 +232,6 @@ def github_push(commit_msg="Update from AI Agent"):
         if repo.is_dirty(untracked_files=True):
             repo.git.add(A=True)
             repo.index.commit(commit_msg)
-            # Push with force if needed (hanya untuk branch main yang belum ada upstream)
             subprocess.run(["git", "push", "-u", "origin", "HEAD", "--force"], check=True, capture_output=True, cwd=CWD)
             return f"✅ Pushed: {commit_msg}"
         return "Tidak ada perubahan."
@@ -255,10 +253,8 @@ LOG_DIR.mkdir(exist_ok=True)
 
 def auto_run(command, project_name):
     global active_project
-    # stop existing session if any
     subprocess.run(["tmux", "kill-session", "-t", project_name], capture_output=True)
     log_file = LOG_DIR / f"{project_name}.log"
-    # buat session baru, jalankan command, pipe ke log
     subprocess.run([
         "tmux", "new-session", "-d", "-s", project_name,
         f"bash -c '{command} 2>&1 | tee {log_file}'"
@@ -297,9 +293,8 @@ def monitor_logs(project_name):
         except:
             pass
 
-# ----------------------- LOG PANEL HELPER -----------------------
+# ----------------------- LOG PANEL -----------------------
 def show_log_panel(project_name, lines=10):
-    """Tampilkan panel berisi log terbaru dari proyek aktif."""
     if not project_name:
         return
     log_file = LOG_DIR / f"{project_name}.log"
@@ -394,6 +389,7 @@ tool_map = {
 
 # ----------------------- MAIN LOOP -----------------------
 def process_tool_calls(messages, tool_calls):
+    global active_project   # deklarasi global agar bisa mengubah active_project
     new_msgs = []
     for tc in tool_calls:
         func_name = tc["function"]["name"]
@@ -414,21 +410,18 @@ def process_tool_calls(messages, tool_calls):
             "name": func_name,
             "content": str(result)
         })
-        # Jika auto_run, mulai monitor
         if func_name == "auto_run":
             project = args.get("project_name")
             if project:
                 t = threading.Thread(target=monitor_logs, args=(project,), daemon=True)
                 t.start()
         elif func_name == "auto_stop":
-            project = args.get("project_name")
-            if project == active_project:
-                global active_project
-                active_project = None
+            # active_project sudah diubah di fungsi auto_stop, tapi kita bisa periksa di sini jika perlu
+            pass
     return new_msgs
 
 def run_agent():
-    global active_project
+    global active_project, CWD  # (global CWD hanya untuk kejelasan)
     load_config()
     model = os.getenv("MODEL", "meta-llama/llama-3.1-70b-instruct")
     SYSTEM_PROMPT = f"""Kamu AI Developer Agent di Termux. Dir: {CWD}
@@ -475,7 +468,6 @@ Gunakan bahasa Indonesia ramah."""
                     if msg.get("content"):
                         console.print(Panel(Markdown(msg["content"]), title="🤖 AI (Auto Fix)", border_style="green"))
                     break
-            # Tampilkan log proyek setelah auto-fix
             show_log_panel(active_project)
         except queue.Empty:
             pass
@@ -512,7 +504,6 @@ Gunakan bahasa Indonesia ramah."""
                     console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
                 break
 
-        # Tampilkan log proyek setelah respons AI
         show_log_panel(active_project)
 
 if __name__ == "__main__":
