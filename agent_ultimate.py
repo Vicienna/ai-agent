@@ -2,9 +2,10 @@
 """
 AI Agent Ultimate – Auto Update + Auto Run + Auto Fix Error/Debugging
 Multi-Provider, GitHub via gh CLI, Tmux session manager.
+Prompt selalu muncul, monitor error di background.
 """
 
-import os, sys, subprocess, json, time, hashlib, select, queue, threading
+import os, sys, subprocess, json, time, hashlib, queue, threading
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -13,8 +14,6 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.syntax import Syntax
 from rich.prompt import Prompt
-from rich.layout import Layout
-from rich.live import Live
 import git
 from dotenv import load_dotenv, set_key
 
@@ -75,7 +74,6 @@ def check_and_update():
 # ----------------------- SETUP WIZARD -----------------------
 def run_setup():
     console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard[/]", border_style="bright_blue"))
-    # provider
     providers = {
         "1": {"name": "OpenAI", "base": "https://api.openai.com/v1", "key_link": "https://platform.openai.com/api-keys"},
         "2": {"name": "OpenRouter", "base": "https://openrouter.ai/api/v1", "key_link": "https://openrouter.ai/keys"},
@@ -85,20 +83,17 @@ def run_setup():
         console.print(f"  {k}. {v['name']}")
     choice = Prompt.ask("Pilih provider", choices=list(providers.keys()), default="2")
     provider = providers[choice]
-    # API key
     console.print(f"\n[bold]API Key {provider['name']}[/]")
     if provider["key_link"]:
         console.print(f"🔗 Dapatkan: {provider['key_link']}")
     api_key = password_prompt("Masukkan API key: ")
     set_key(ENV_FILE, "API_KEY", api_key)
     set_key(ENV_FILE, "API_PROVIDER", provider["name"])
-    # base URL
     if choice == "3":
         base_url = Prompt.ask("Base URL")
         set_key(ENV_FILE, "API_BASE_URL", base_url)
     else:
         set_key(ENV_FILE, "API_BASE_URL", provider["base"])
-    # model
     if choice == "1":
         models = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "Custom"]
     elif choice == "2":
@@ -121,13 +116,11 @@ def run_setup():
     else:
         model = models[int(model_choice)-1]
     set_key(ENV_FILE, "MODEL", model)
-    # GitHub
     try:
         subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
         console.print("[green]✓ gh CLI login.[/]")
     except:
         console.print("[yellow]⚠ Jalankan 'gh auth login'[/]")
-    # workdir
     d = Prompt.ask("Direktori kerja (kosongkan = sekarang)")
     if d.strip():
         set_key(ENV_FILE, "WORK_DIR", d)
@@ -234,7 +227,6 @@ def auto_run(command, project_name):
     # stop existing session if any
     subprocess.run(["tmux", "kill-session", "-t", project_name], capture_output=True)
     log_file = LOG_DIR / f"{project_name}.log"
-    # buat session baru, jalankan command, pipe ke log
     subprocess.run([
         "tmux", "new-session", "-d", "-s", project_name,
         f"bash -c '{command} 2>&1 | tee {log_file}'"
@@ -252,20 +244,21 @@ def monitor_logs(project_name):
     log_file = LOG_DIR / f"{project_name}.log"
     if not log_file.exists():
         return
-    last_size = log_file.stat().st_size
+    # ensure file exists before monitoring
     while True:
         time.sleep(1)
         if not log_file.exists():
-            break
+            continue
         current_size = log_file.stat().st_size
-        if current_size > last_size:
-            with open(log_file, 'r') as f:
-                f.seek(last_size)
-                new_lines = f.read()
-            last_size = current_size
-            # deteksi error pattern
-            if "Traceback" in new_lines or "Error" in new_lines or "error" in new_lines:
-                error_queue.put((project_name, new_lines))
+        if current_size == 0:
+            continue
+        # read entire file and look for errors
+        with open(log_file, 'r') as f:
+            content = f.read()
+        if "Traceback" in content or "Error" in content or "error" in content:
+            # send only new errors (not previously sent)
+            error_queue.put((project_name, content))
+        time.sleep(2)  # check every 2 seconds
 
 # ----------------------- TOOLS -----------------------
 def change_directory(path):
@@ -316,7 +309,6 @@ def edit_file(path, old_str, new_str):
     full.write_text(text.replace(old_str, new_str, 1))
     return f"✅ {path} diedit."
 
-# tool spec
 tools_spec = [
     {"type": "function", "function": {"name": "change_directory", "description": "Pindah direktori.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
     {"type": "function", "function": {"name": "list_directory", "description": "Lihat isi direktori.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "default": "."}}}}},
@@ -346,6 +338,39 @@ tool_map = {
 }
 
 # ----------------------- MAIN LOOP -----------------------
+def process_tool_calls(messages, tool_calls):
+    """Eksekusi tool calls dan kembalikan list tambahan messages."""
+    new_msgs = []
+    for tc in tool_calls:
+        func_name = tc["function"]["name"]
+        args = json.loads(tc["function"]["arguments"])
+        console.print(f"[dim]🔧 {func_name}[/]")
+        func = tool_map.get(func_name)
+        if func:
+            try:
+                result = func(**args)
+            except Exception as e:
+                result = f"ERROR: {e}"
+        else:
+            result = "Tool tidak dikenal."
+        console.print(Panel(Syntax(str(result), "text", theme="monokai"), title=f"📤 {func_name}"))
+        new_msgs.append({
+            "role": "tool",
+            "tool_call_id": tc["id"],
+            "name": func_name,
+            "content": str(result)
+        })
+        # Jika auto_run, mulai monitor
+        if func_name == "auto_run":
+            project = args.get("project_name")
+            if project:
+                t = threading.Thread(target=monitor_logs, args=(project,), daemon=True)
+                t.start()
+        elif func_name == "auto_stop":
+            # optional: stop monitor? tidak perlu karena monitor akan berhenti jika session mati
+            pass
+    return new_msgs
+
 def run_agent():
     load_config()
     model = os.getenv("MODEL", "meta-llama/llama-3.1-70b-instruct")
@@ -359,7 +384,6 @@ Gunakan bahasa Indonesia ramah."""
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     os.system('clear')
-    # auto update check
     console.print("[dim]Memeriksa update...[/]")
     check_and_update()
     time.sleep(1)
@@ -371,109 +395,65 @@ Gunakan bahasa Indonesia ramah."""
         f"[dim]Fitur: Auto Update | Auto Run | Auto Fix[/]",
         border_style="bright_blue"))
 
-    # thread monitor untuk proyek terakhir yang dijalankan
-    monitor_thread = None
-    active_project = None
-
-    def start_monitor(project):
-        nonlocal monitor_thread
-        if monitor_thread and monitor_thread.is_alive():
-            # sudah berjalan, tidak perlu buat baru
-            return
-        monitor_thread = threading.Thread(target=monitor_logs, args=(project,), daemon=True)
-        monitor_thread.start()
-
     while True:
-        # Cek error queue dari monitor
+        # Proses error dari queue (auto fix) TERLEBIH DAHULU sebelum prompt
         try:
             project, err_text = error_queue.get_nowait()
             console.print(Panel(f"[bold red]🐛 Error terdeteksi di {project}![/]\n{err_text[:500]}", title="Auto Monitor"))
-            # Kirim ke AI
             messages.append({"role": "user", "content": f"ERROR terdeteksi di proyek {project}:\n{err_text}\nPerbaiki dan restart."})
-            # proses langsung
+            # Proses langsung (tanpa input user)
             while True:
                 try:
                     resp = chat_completion(messages, tools_spec)
-                    if "error" in resp:
-                        console.print(f"[red]{resp['error']}[/]")
-                        break
-                    msg = resp["choices"][0]["message"]
-                    messages.append(msg)
-                    if "tool_calls" not in msg:
-                        if msg.get("content"):
-                            console.print(Panel(Markdown(msg["content"]), title="🤖 AI (Auto Fix)", border_style="green"))
-                        break
-                    for tc in msg["tool_calls"]:
-                        func_name = tc["function"]["name"]
-                        args = json.loads(tc["function"]["arguments"])
-                        console.print(f"[dim]🔧 {func_name}[/]")
-                        func = tool_map.get(func_name)
-                        if func:
-                            try:
-                                result = func(**args)
-                            except Exception as e:
-                                result = f"ERROR: {e}"
-                        else:
-                            result = "Tool tidak dikenal."
-                        console.print(Panel(Syntax(str(result), "text", theme="monokai"), title=f"📤 {func_name}"))
-                        messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": str(result)})
-                        # jika auto_run dijalankan, update project name
-                        if func_name == "auto_run":
-                            active_project = args.get("project_name")
-                            start_monitor(active_project)
                 except KeyboardInterrupt:
+                    break
+                if "error" in resp:
+                    console.print(f"[red]{resp['error']}[/]")
+                    break
+                msg = resp["choices"][0]["message"]
+                messages.append(msg)
+                if "tool_calls" in msg:
+                    tool_msgs = process_tool_calls(messages, msg["tool_calls"])
+                    messages.extend(tool_msgs)
+                else:
+                    if msg.get("content"):
+                        console.print(Panel(Markdown(msg["content"]), title="🤖 AI (Auto Fix)", border_style="green"))
                     break
         except queue.Empty:
             pass
 
-        # Input user dengan timeout (non-blocking)
-        ready, _, _ = select.select([sys.stdin], [], [], 0.5)
-        if ready:
+        # Prompt input user
+        try:
+            user_input = Prompt.ask("\n[bold green]▸[/]")
+        except (KeyboardInterrupt, EOFError):
+            console.print("\n[red]Keluar.[/]")
+            break
+        if user_input.lower() in ["exit", "quit", "keluar"]:
+            break
+        if not user_input.strip():
+            continue
+
+        messages.append({"role": "user", "content": user_input})
+
+        # Proses respons AI
+        while True:
             try:
-                user_input = sys.stdin.readline().strip()
-            except (KeyboardInterrupt, EOFError):
-                console.print("\n[red]Keluar.[/]")
+                resp = chat_completion(messages, tools_spec)
+            except KeyboardInterrupt:
+                console.print("\n[dim]⚠ Dibatalkan.[/]")
                 break
-            if user_input.lower() in ["exit", "quit", "keluar"]:
+            if "error" in resp:
+                console.print(f"[red]{resp['error']}[/]")
                 break
-            if not user_input:
-                continue
-            # Proses input user
-            messages.append({"role": "user", "content": user_input})
-            while True:
-                try:
-                    resp = chat_completion(messages, tools_spec)
-                    if "error" in resp:
-                        console.print(f"[red]{resp['error']}[/]")
-                        break
-                    msg = resp["choices"][0]["message"]
-                    messages.append(msg)
-                    if "tool_calls" not in msg:
-                        if msg.get("content"):
-                            console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
-                        break
-                    for tc in msg["tool_calls"]:
-                        func_name = tc["function"]["name"]
-                        args = json.loads(tc["function"]["arguments"])
-                        console.print(f"[dim]🔧 {func_name}[/]")
-                        func = tool_map.get(func_name)
-                        if func:
-                            try:
-                                result = func(**args)
-                            except Exception as e:
-                                result = f"ERROR: {e}"
-                        else:
-                            result = "Tool tidak dikenal."
-                        console.print(Panel(Syntax(str(result), "text", theme="monokai"), title=f"📤 {func_name}"))
-                        messages.append({"role": "tool", "tool_call_id": tc["id"], "name": func_name, "content": str(result)})
-                        if func_name == "auto_run":
-                            active_project = args.get("project_name")
-                            start_monitor(active_project)
-                        elif func_name == "auto_stop":
-                            active_project = None
-                except KeyboardInterrupt:
-                    console.print("\n[dim]⚠ Dibatalkan.[/]")
-                    break
+            msg = resp["choices"][0]["message"]
+            messages.append(msg)
+            if "tool_calls" in msg:
+                tool_msgs = process_tool_calls(messages, msg["tool_calls"])
+                messages.extend(tool_msgs)
+            else:
+                if msg.get("content"):
+                    console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
+                break
 
 if __name__ == "__main__":
     run_agent()
