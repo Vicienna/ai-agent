@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """
-AI Agent Ultimate – Multi-Provider (OpenAI, OpenRouter, Groq, Ollama, Custom)
-+ Animasi Thinking, Anti-Pengulangan, Auto Run/Fix, Log Panel
+AI Agent Ultimate – Full Featured + Streaming Thinking Time + Multi-Provider
 """
 
-import os, sys, subprocess, json, time, hashlib, queue, threading
+import os, sys, subprocess, json, time, hashlib, queue, threading, re
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -13,6 +13,8 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.syntax import Syntax
 from rich.prompt import Prompt
+from rich.live import Live
+from rich.text import Text
 import git
 from dotenv import load_dotenv, set_key
 
@@ -103,7 +105,6 @@ def run_setup():
     choice = Prompt.ask("Pilih provider", choices=list(providers.keys()), default="2")
     provider = providers[choice]
 
-    # API Key
     if provider["name"] == "Ollama (Local)":
         console.print("[dim]Ollama lokal tidak memerlukan API key.[/]")
         api_key = ""
@@ -115,28 +116,29 @@ def run_setup():
     set_key(ENV_FILE, "API_KEY", api_key)
     set_key(ENV_FILE, "API_PROVIDER", provider["name"])
 
-    # Base URL
-    if choice == "5" or provider["base"] == "":
+    if choice == "5":
         base_url = Prompt.ask("Masukkan base URL (tanpa /chat/completions)").strip().rstrip('/')
         set_key(ENV_FILE, "API_BASE_URL", base_url)
     else:
         set_key(ENV_FILE, "API_BASE_URL", provider["base"])
 
-    # Model
+    # Model selection
     console.print("\n[bold]Pilih Model[/]")
     if choice == "1":  # OpenAI
         models = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "Custom"]
-        console.print("[yellow]ℹ GPT‑3.5 mungkin kurang optimal untuk alat.[/]")
+        for i, m in enumerate(models, 1):
+            console.print(f"  {i}. {m}")
+        model_choice = Prompt.ask("Pilih nomor", choices=[str(i) for i in range(1, len(models)+1)], default="1")
+        if models[int(model_choice)-1] == "Custom":
+            model = Prompt.ask("ID model")
+        else:
+            model = models[int(model_choice)-1]
     elif choice == "2":  # OpenRouter
         console.print("[bold green]ℹ Model berikut teruji mendukung semua fitur agent:[/]")
-        models = [
-            "1. google/gemini-2.0-flash-001 ✅ (gratis, direkomendasikan)",
-            "2. openai/gpt-4o (butuh kredit)",
-            "3. anthropic/claude-3.5-sonnet (butuh kredit)",
-            "4. Custom (masukkan ID sendiri)"
-        ]
-        for m in models:
-            console.print(f"  {m}")
+        console.print("  1. google/gemini-2.0-flash-001 ✅ (gratis, direkomendasikan)")
+        console.print("  2. openai/gpt-4o (butuh kredit)")
+        console.print("  3. anthropic/claude-3.5-sonnet (butuh kredit)")
+        console.print("  4. Custom")
         model_choice = Prompt.ask("Pilih nomor", choices=["1","2","3","4"], default="1")
         if model_choice == "1":
             model = "google/gemini-2.0-flash-001"
@@ -147,14 +149,10 @@ def run_setup():
         else:
             model = Prompt.ask("Masukkan ID model")
     elif choice == "3":  # Groq
-        models = [
-            "1. llama-3.1-70b-versatile",
-            "2. mixtral-8x7b-32768",
-            "3. gemma2-9b-it",
-            "4. Custom"
-        ]
-        for m in models:
-            console.print(f"  {m}")
+        console.print("  1. llama-3.1-70b-versatile")
+        console.print("  2. mixtral-8x7b-32768")
+        console.print("  3. gemma2-9b-it")
+        console.print("  4. Custom")
         model_choice = Prompt.ask("Pilih nomor", choices=["1","2","3","4"], default="1")
         if model_choice == "1":
             model = "llama-3.1-70b-versatile"
@@ -168,7 +166,6 @@ def run_setup():
         model = Prompt.ask("Nama model (contoh: nemotron-3-super:cloud)", default="nemotron-3-super:cloud")
     else:  # Custom
         model = Prompt.ask("ID model")
-
     set_key(ENV_FILE, "MODEL", model)
 
     # GitHub Token
@@ -197,7 +194,6 @@ def run_setup():
             console.print("[green]✓ gh CLI sudah login.[/]")
         except:
             console.print("[yellow]⚠ gh CLI belum login.[/]")
-
     d = Prompt.ask("Direktori kerja (kosongkan = sekarang)")
     if d.strip():
         set_key(ENV_FILE, "WORK_DIR", d)
@@ -227,12 +223,101 @@ def load_config():
             pass
     load_memory()
 
-# ----------------------- API CLIENT (non-stream) -----------------------
+# ----------------------- API CLIENT (streaming + thinking) -----------------------
 def normalize_api_url(base):
     base = base.rstrip('/')
     return base if base.endswith('/chat/completions') else f"{base}/chat/completions"
 
-def chat_completion(messages, tools=None, max_retries=3):
+def stream_chat_completion_with_thinking(messages, tools=None):
+    """
+    Streaming dengan tangkapan reasoning/thinking token.
+    Mengembalikan generator yang yield:
+      ('thinking', token)  -> token dari proses berpikir model
+      ('content', token)   -> token dari jawaban
+      ('done', final_msg)  -> setelah selesai
+      ('error', msg)
+    """
+    api_key = os.getenv("API_KEY")
+    base_url = os.getenv("API_BASE_URL")
+    provider = os.getenv("API_PROVIDER", "")
+    model = os.getenv("MODEL")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    if "OpenRouter" in provider:
+        headers["HTTP-Referer"] = "http://localhost"
+        headers["X-Title"] = "AI-Agent"
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "stream": True
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    session = requests.Session()
+    url = normalize_api_url(base_url)
+    try:
+        resp = session.post(url, headers=headers, json=payload, stream=True, timeout=180)
+        if resp.status_code != 200:
+            yield ('error', f"HTTP {resp.status_code}: {resp.text[:300]}")
+            return
+        content_collected = ""
+        thinking_collected = ""
+        tool_calls = []
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            if line.startswith("data: "):
+                data_str = line[6:]
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data_str)
+                    delta = obj.get("choices", [{}])[0].get("delta", {})
+                    # Reasoning/thinking token (untuk model seperti DeepSeek R1, Nemotron, dll)
+                    reasoning = delta.get("reasoning") or delta.get("thinking") or delta.get("reasoning_content")
+                    if reasoning:
+                        thinking_collected += reasoning
+                        yield ('thinking', reasoning)
+                    # Content biasa
+                    content = delta.get("content")
+                    if content:
+                        content_collected += content
+                        yield ('content', content)
+                    # Tool calls (jika ada)
+                    if "tool_calls" in delta:
+                        for tc in delta["tool_calls"]:
+                            idx = tc.get("index", 0)
+                            while len(tool_calls) <= idx:
+                                tool_calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                            if tc.get("id"):
+                                tool_calls[idx]["id"] = tc["id"]
+                            if tc.get("function"):
+                                if "name" in tc["function"]:
+                                    tool_calls[idx]["function"]["name"] = tc["function"]["name"]
+                                if "arguments" in tc["function"]:
+                                    tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                except json.JSONDecodeError:
+                    pass
+        final_msg = {"role": "assistant", "content": content_collected}
+        if thinking_collected:
+            final_msg["thinking"] = thinking_collected
+        if tool_calls:
+            for tc in tool_calls:
+                try:
+                    tc["function"]["arguments"] = json.loads(tc["function"]["arguments"])
+                except:
+                    pass
+            final_msg["tool_calls"] = tool_calls
+        yield ('done', final_msg)
+    except requests.exceptions.RequestException as e:
+        yield ('error', f"Koneksi gagal: {e}")
+
+def chat_completion_nonstream(messages, tools=None, max_retries=3):
     api_key = os.getenv("API_KEY")
     base_url = os.getenv("API_BASE_URL")
     provider = os.getenv("API_PROVIDER", "")
@@ -248,16 +333,13 @@ def chat_completion(messages, tools=None, max_retries=3):
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
-
     session = requests.Session()
     retries = Retry(total=max_retries, backoff_factor=1,
                     status_forcelist=[429, 502, 503, 504],
                     allowed_methods=["POST"],
                     respect_retry_after_header=True)
-    adapter = HTTPAdapter(max_retries=retries)
-    session.mount("https://", adapter)
-    session.mount("http://", adapter)
-
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+    session.mount("http://", HTTPAdapter(max_retries=retries))
     url = normalize_api_url(base_url)
     for attempt in range(max_retries):
         try:
@@ -271,8 +353,7 @@ def chat_completion(messages, tools=None, max_retries=3):
             if resp.status_code != 200:
                 return {"error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
             return resp.json()
-        except (requests.exceptions.ConnectionError,
-                requests.exceptions.ChunkedEncodingError) as e:
+        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
             if attempt < max_retries - 1:
                 console.print(f"[yellow]⚠ Koneksi gagal, coba lagi ({attempt+2}/{max_retries})...[/]")
                 time.sleep(2 ** attempt)
@@ -280,7 +361,7 @@ def chat_completion(messages, tools=None, max_retries=3):
                 return {"error": f"Koneksi gagal: {e}"}
     return {"error": "Gagal"}
 
-# ----------------------- TOOLS (fungsi sama) -----------------------
+# ----------------------- TOOLS (sama) -----------------------
 def check_github():
     try:
         subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
@@ -513,8 +594,8 @@ def process_tool_calls(messages, tool_calls):
         key = f"{func_name}:{json.dumps(args, sort_keys=True)}"
         tool_call_counter[key] = tool_call_counter.get(key, 0) + 1
         if tool_call_counter[key] > MAX_REPEATED_CALLS:
-            console.print(f"[red]⚠ {func_name} dipanggil >{MAX_REPEATED_CALLS}x dengan argumen sama. Diabaikan.[/]")
-            result = f"❌ Tindakan '{func_name}' diabaikan karena terlalu sering diulang."
+            console.print(f"[red]⚠ {func_name} dipanggil >{MAX_REPEATED_CALLS}x. Diabaikan.[/]")
+            result = f"❌ Tindakan '{func_name}' diabaikan."
         else:
             console.print(f"[dim]🔧 {func_name}[/]")
             func = tool_map.get(func_name)
@@ -535,7 +616,60 @@ def process_tool_calls(messages, tool_calls):
                 threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
     return new_msgs
 
-# ----------------------- MAIN LOOP (dengan animasi thinking) -----------------------
+# ----------------------- DISPLAY STREAMING + THINKING TIME -----------------------
+def display_stream_with_thinking(messages):
+    """
+    Menampilkan streaming dengan panel thinking jika ada, dan menghitung waktu.
+    """
+    start_time = time.time()
+    thinking_text = ""
+    content_text = ""
+    has_thinking = False
+    first_token_time = None
+
+    # Live display untuk konten
+    with Live(Text(""), refresh_per_second=10, vertical_overflow="visible") as live:
+        for ev, data in stream_chat_completion_with_thinking(messages, tools_spec):
+            if ev == 'thinking':
+                if not has_thinking:
+                    has_thinking = True
+                thinking_text += data
+                # Update panel thinking
+                panel_content = Text(thinking_text, style="dim cyan")
+                live.update(Panel(panel_content, title="🧠 Thinking Process", border_style="cyan"))
+            elif ev == 'content':
+                if not first_token_time:
+                    first_token_time = time.time()
+                # Jika sebelumnya ada thinking, kita ganti live dengan konten
+                content_text += data
+                # Hentikan thinking panel dan tampilkan konten
+                combined = Text()
+                if has_thinking:
+                    combined.append("━" * 40 + "\n", style="dim")
+                    combined.append(thinking_text + "\n", style="dim cyan")
+                    combined.append("━" * 40 + "\n\n", style="dim")
+                combined.append(content_text)
+                live.update(combined)
+            elif ev == 'error':
+                console.print(f"[red]{data}[/]")
+                return None
+            elif ev == 'done':
+                final_msg = data
+                break
+
+    total_time = time.time() - start_time
+    # Tampilkan waktu thinking
+    if first_token_time:
+        thinking_duration = first_token_time - start_time
+    else:
+        thinking_duration = total_time
+    time_str = f"{thinking_duration:06.3f}s"  # detik.milidetik
+    console.print(f"[bold magenta]⏱️ Thinking time: {time_str}[/]")
+    if has_thinking:
+        console.print(f"[dim]💭 Model memberikan reasoning process.[/]")
+    return final_msg
+
+# ----------------------- MAIN LOOP -----------------------
 def run_agent():
     global tool_call_counter, task_list
     load_config()
@@ -555,7 +689,7 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
     console.print(Panel.fit(
         f"[bold cyan]● AI Agent Ultimate[/]\n"
         f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}\n"
-        f"[dim]Fitur: Auto Update | Auto Run | Auto Fix | Log Panel | Anti‑Pengulangan | Ganti Provider | Animasi Thinking[/]",
+        f"[dim]Fitur: Auto Update | Auto Run | Auto Fix | Log Panel | Anti‑Pengulangan | Ganti Provider | Thinking Time[/]",
         border_style="bright_blue"))
 
     if task_list:
@@ -564,7 +698,7 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
     while True:
         tool_call_counter.clear()
 
-        # Proses auto-fix dari monitor
+        # Auto-fix
         try:
             project, err_text = error_queue.get_nowait()
             console.print(Panel(f"[bold red]🐛 Error terdeteksi di {project}![/]\n{err_text[:500]}", title="Auto Monitor"))
@@ -590,24 +724,35 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
 
         messages.append({"role": "user", "content": user_input})
 
-        step = 0
-        while step < 10:
-            # Animasi thinking
-            with console.status("[bold cyan]🧠 Thinking...[/]", spinner="dots"):
-                resp = chat_completion(messages, tools_spec)
-            if "error" in resp:
-                console.print(f"[red]{resp['error']}[/]")
-                break
-            msg = resp["choices"][0]["message"]
-            messages.append(msg)
-            if "tool_calls" in msg:
-                tool_msgs = process_tool_calls(messages, msg["tool_calls"])
-                messages.extend(tool_msgs)
-                step += 1
-            else:
-                if msg.get("content"):
-                    console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
-                break
+        # Tampilkan streaming dengan thinking
+        final_msg = display_stream_with_thinking(messages)
+        if final_msg is None:
+            continue
+        # Proses tool calls jika ada
+        if "tool_calls" in final_msg:
+            messages.append(final_msg)
+            tool_msgs = process_tool_calls(messages, final_msg["tool_calls"])
+            messages.extend(tool_msgs)
+            # Lanjutkan dengan non-stream untuk hasil tool
+            for _ in range(5):
+                resp = chat_completion_nonstream(messages, tools_spec)
+                if "error" in resp:
+                    console.print(f"[red]{resp['error']}[/]")
+                    break
+                msg = resp["choices"][0]["message"]
+                messages.append(msg)
+                if "tool_calls" in msg:
+                    tool_msgs = process_tool_calls(messages, msg["tool_calls"])
+                    messages.extend(tool_msgs)
+                else:
+                    if msg.get("content"):
+                        console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
+                    break
+        else:
+            messages.append(final_msg)
+            if final_msg.get("content"):
+                # Sudah ditampilkan saat streaming, tapi bisa kita tampilkan lagi sebagai panel
+                console.print(Panel(Markdown(final_msg["content"]), title="🤖 AI", border_style="green"))
 
         show_log_panel(active_project)
 
