@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI Agent Ultimate – Cancel Feature + All previous fixes
+AI Agent Ultimate – Cancel Feature + All previous fixes (rendering fix)
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -541,7 +541,8 @@ def display_stream(messages):
         else:
             panel_text.append("🧠 Thinking... ", style="bold yellow")
             panel_text.append(timer_str, style="bold magenta")
-        panel_text.append("\n[red](Ctrl+C untuk batal)[/]", style="dim")
+        panel_text.append("\n", style="")
+        panel_text.append("(Ctrl+C untuk batal)", style="dim red")
         return Panel(panel_text, border_style="blue", title="Streaming")
 
     try:
@@ -628,18 +629,15 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
             if not user_input.strip():
                 continue
 
-        # Simpan user message dulu, bisa dihapus jika nanti dibatalkan
         messages.append({"role":"user","content":user_input})
-        msg_index = len(messages) - 1  # posisi
+        msg_index = len(messages) - 1
 
         final_msg, content = display_stream(messages)
         if final_msg is None:
-            # Batal atau error, hapus user message terakhir
             if len(messages) > msg_index:
                 del messages[msg_index]
             continue
 
-        # Jika ada tool calls, jalankan tool dan lanjutkan
         if "tool_calls" in final_msg:
             messages.append(final_msg)
             try:
@@ -661,8 +659,6 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
                         break
             except KeyboardInterrupt:
                 console.print("\n[red]⚠ Dibatalkan saat eksekusi tools.[/]")
-                # Hapus user message terakhir dan semua hasil tool yang sudah ditambahkan
-                # Kembalikan pesan ke sebelum user_input
                 del messages[msg_index:]
                 continue
         else:
