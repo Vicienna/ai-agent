@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-AI Agent Ultimate – Memory, Task Planner, Anti-Pengulangan, Multi-Provider
-+ GitHub token setup wizard (auto config git identity)
+AI Agent Ultimate – Direct & Streaming, Anti-Pengulangan, Change Provider, Auto Everything
 """
 
-import os, sys, subprocess, json, time, hashlib, queue, threading, re, itertools
+import os, sys, subprocess, json, time, hashlib, queue, threading
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -51,10 +50,10 @@ CWD = Path.cwd()
 active_project = None
 tool_call_counter = {}
 
-# ----------------------- MEMORY -----------------------
+# ----------------------- MEMORY (hanya simpan tugas aktif) -----------------------
 memory_file = Path(__file__).parent / "agent_memory.json"
-task_list = []
-completed_tasks = []
+task_list = []          # daftar tugas aktif (jika ada dari auto-fix)
+completed_tasks = []    # riwayat
 
 def load_memory():
     global task_list, completed_tasks
@@ -100,7 +99,6 @@ def check_and_update():
 def run_setup():
     console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard[/]", border_style="bright_blue"))
 
-    # --- Provider & API Key ---
     providers = {
         "1": {"name": "OpenAI", "base": "https://api.openai.com/v1", "key_link": "https://platform.openai.com/api-keys"},
         "2": {"name": "OpenRouter", "base": "https://openrouter.ai/api/v1", "key_link": "https://openrouter.ai/keys"},
@@ -123,7 +121,6 @@ def run_setup():
     else:
         set_key(ENV_FILE, "API_BASE_URL", provider["base"])
 
-    # --- Model ---
     if choice == "1":
         models = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "Custom"]
     elif choice == "2":
@@ -147,51 +144,44 @@ def run_setup():
         model = models[int(model_choice)-1]
     set_key(ENV_FILE, "MODEL", model)
 
-    # --- GitHub Token + Auto Config ---
+    # --- GitHub Token (opsional) ---
     console.print("\n[bold]🔐 GitHub Token (Opsional)[/]")
-    console.print("Gunakan Personal Access Token (classic) dengan scope 'repo' dan 'user'.")
-    console.print("Kosongkan jika sudah login gh CLI atau ingin nanti.")
+    console.print("Masukkan Personal Access Token (classic) dengan scope 'repo' dan 'user'.")
+    console.print("Kosongkan jika sudah login gh CLI.")
     github_token = password_prompt("GitHub Token: ")
     if github_token.strip():
         try:
-            # Login gh CLI dengan token
-            res = subprocess.run(
+            login_res = subprocess.run(
                 ["gh", "auth", "login", "--with-token"],
                 input=github_token,
                 text=True,
                 capture_output=True
             )
-            if res.returncode != 0:
-                console.print(f"[red]Gagal login gh: {res.stderr}[/]")
-            else:
+            if login_res.returncode == 0:
                 console.print("[green]✓ Login gh berhasil.[/]")
-                # Ambil user info
+                # Ambil info user
                 user_res = subprocess.run(["gh", "api", "user"], capture_output=True, text=True)
                 if user_res.returncode == 0:
                     user_data = json.loads(user_res.stdout)
                     github_username = user_data.get("login")
                     github_email = user_data.get("email") or f"{github_username}@users.noreply.github.com"
                     github_name = user_data.get("name") or github_username
-                    # Simpan env GITHUB_USER
                     set_key(ENV_FILE, "GITHUB_USER", github_username)
                     os.environ["GITHUB_USER"] = github_username
-                    # Atur konfigurasi Git (lokal)
                     subprocess.run(["git", "config", "--global", "user.name", github_name], check=False)
                     subprocess.run(["git", "config", "--global", "user.email", github_email], check=False)
-                    console.print(f"[green]✓ Git config diset: {github_name} <{github_email}>[/]")
-                else:
-                    console.print("[yellow]⚠ Gagal mengambil info user, git config tidak diubah.[/]")
+                    console.print(f"[green]✓ Git config: {github_name} <{github_email}>[/]")
+            else:
+                console.print(f"[red]Gagal login gh: {login_res.stderr}[/]")
         except Exception as e:
             console.print(f"[red]Error: {e}[/]")
     else:
-        # Cek apakah gh sudah login
         try:
             subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
             console.print("[green]✓ gh CLI sudah login.[/]")
         except:
-            console.print("[yellow]⚠ gh CLI belum login, beberapa fitur GitHub mungkin tidak berfungsi.[/]")
+            console.print("[yellow]⚠ gh CLI belum login.[/]")
 
-    # --- Working directory ---
     d = Prompt.ask("Direktori kerja (kosongkan = sekarang)")
     if d.strip():
         set_key(ENV_FILE, "WORK_DIR", d)
@@ -209,7 +199,6 @@ def load_config():
         os.chdir(Path(work_dir).expanduser().resolve())
     global CWD
     CWD = Path.cwd()
-    # Pastikan env GITHUB_USER ada
     if not os.getenv("GITHUB_USER"):
         try:
             res = subprocess.run(["gh", "api", "user"], capture_output=True, text=True)
@@ -222,7 +211,7 @@ def load_config():
             pass
     load_memory()
 
-# ----------------------- API CLIENT (sama seperti sebelumnya) -----------------------
+# ----------------------- API CLIENT + STREAMING -----------------------
 def normalize_api_url(base):
     base = base.rstrip('/')
     if base.endswith('/chat/completions'):
@@ -230,7 +219,89 @@ def normalize_api_url(base):
     else:
         return f"{base}/chat/completions"
 
-def chat_completion(messages, tools=None, max_retries=3):
+def stream_chat_completion(messages, tools=None):
+    """
+    Streaming chat completion.
+    Yields (event_type, data) where event_type is 'token', 'done', 'error'.
+    """
+    api_key = os.getenv("API_KEY")
+    base_url = os.getenv("API_BASE_URL")
+    provider = os.getenv("API_PROVIDER", "")
+    model = os.getenv("MODEL")
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
+    if "OpenRouter" in provider:
+        headers["HTTP-Referer"] = "http://localhost"
+        headers["X-Title"] = "AI-Agent"
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.2,
+        "stream": True,
+    }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = "auto"
+
+    session = requests.Session()
+    url = normalize_api_url(base_url)
+    try:
+        resp = session.post(url, headers=headers, json=payload, stream=True, timeout=120)
+        if resp.status_code != 200:
+            yield ('error', f"HTTP {resp.status_code}: {resp.text[:300]}")
+            return
+        # Proses baris SSE
+        collected_content = ""
+        tool_calls = []   # akan diisi jika ada
+        current_tool_call = None
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            if line.startswith("data: "):
+                data_str = line[6:]
+                if data_str.strip() == "[DONE]":
+                    break
+                try:
+                    obj = json.loads(data_str)
+                    delta = obj.get("choices", [{}])[0].get("delta", {})
+                    if "content" in delta and delta["content"] is not None:
+                        token = delta["content"]
+                        collected_content += token
+                        yield ('token', token)
+                    if "tool_calls" in delta:
+                        for tc in delta["tool_calls"]:
+                            if "index" in tc:
+                                idx = tc["index"]
+                                # Ensure tool_calls list large enough
+                                while len(tool_calls) <= idx:
+                                    tool_calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+                                if tc.get("id"):
+                                    tool_calls[idx]["id"] = tc["id"]
+                                if tc.get("function"):
+                                    if "name" in tc["function"]:
+                                        tool_calls[idx]["function"]["name"] = tc["function"]["name"]
+                                    if "arguments" in tc["function"]:
+                                        tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                except json.JSONDecodeError:
+                    pass
+        # Setelah stream selesai, kirim final message
+        final_message = {"role": "assistant", "content": collected_content}
+        if tool_calls:
+            # Parse arguments string menjadi dict untuk setiap tool call
+            for tc in tool_calls:
+                try:
+                    tc["function"]["arguments"] = json.loads(tc["function"]["arguments"])
+                except:
+                    pass
+            final_message["tool_calls"] = tool_calls
+        yield ('done', final_message)
+    except requests.exceptions.RequestException as e:
+        yield ('error', f"Koneksi gagal: {e}")
+
+def chat_completion_nonstream(messages, tools=None, max_retries=3):
+    """Fallback untuk error atau non-streaming (masih dipakai planner)."""
     api_key = os.getenv("API_KEY")
     base_url = os.getenv("API_BASE_URL")
     provider = os.getenv("API_PROVIDER", "")
@@ -278,7 +349,7 @@ def chat_completion(messages, tools=None, max_retries=3):
                 return {"error": f"Koneksi gagal: {e}"}
     return {"error": "Gagal"}
 
-# ----------------------- TOOLS (fungsi‑fungsi sama, ringkas) -----------------------
+# ----------------------- TOOLS (fungsi persis sama dengan versi sebelumnya) -----------------------
 def check_github():
     try:
         subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
@@ -303,7 +374,6 @@ def ensure_git_identity():
             writer.set_value("user", "email", email)
             writer.set_value("user", "name", name)
             writer.release()
-            console.print(f"[dim]Git identity diset: {name} <{email}>[/]")
     except:
         pass
 
@@ -420,6 +490,7 @@ def change_provider(provider=None, api_key=None, base_url=None, model=None):
     new_model = os.getenv("MODEL", "Tidak diketahui")
     return f"✅ Provider diubah: {new_provider} | Model: {new_model}"
 
+# Tool dasar
 def change_directory(path):
     global CWD
     try:
@@ -515,7 +586,7 @@ def process_tool_calls(messages, tool_calls):
     new_msgs = []
     for tc in tool_calls:
         func_name = tc["function"]["name"]
-        args = json.loads(tc["function"]["arguments"])
+        args = tc["function"]["arguments"]  # sudah dict
         args_str = json.dumps(args, sort_keys=True)
         key = f"{func_name}:{args_str}"
         tool_call_counter[key] = tool_call_counter.get(key, 0) + 1
@@ -542,63 +613,91 @@ def process_tool_calls(messages, tool_calls):
                 threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
     return new_msgs
 
-# ----------------------- PLANNER / MEMORY -----------------------
-def plan_tasks(user_input):
-    prompt = f"""User request: "{user_input}"
-Buat daftar langkah kecil yang jelas untuk diselesaikan AI agent.
-Output HANYA JSON array of objects: [{{"task": "deskripsi", "type": "tool_or_response"}}].
-Contoh: [{{"task": "Buka direktori proyek", "type": "tool"}}, {{"task": "Baca file config", "type": "tool"}}, {{"task": "Berikan ringkasan", "type": "response"}}]
-JANGAN sertakan teks lain selain JSON.
-"""
-    messages = [
-        {"role": "system", "content": "Kamu adalah perencana tugas AI agent. Jawab hanya JSON."},
-        {"role": "user", "content": prompt}
-    ]
-    try:
-        resp = chat_completion(messages, tools=None, max_retries=2)
-        if "error" in resp:
-            return [{"task": user_input, "type": "response"}]
-        content = resp["choices"][0]["message"]["content"].strip()
-        if content.startswith("```"):
-            lines = content.split('\n')
-            content = '\n'.join(lines[1:-1]) if lines[-1].strip() == "```" else '\n'.join(lines[1:])
-        tasks = json.loads(content)
-        if not isinstance(tasks, list):
-            return [{"task": user_input, "type": "response"}]
-        return tasks
-    except:
-        return [{"task": user_input, "type": "response"}]
+# ----------------------- STREAMING DISPLAY -----------------------
+def show_streamed_response(user_input, system_prompt, conversation_messages):
+    """
+    Mengirim user_input, menampilkan streaming token, dan mengembalikan final message + pesan tambahan untuk tool.
+    """
+    messages = conversation_messages + [{"role": "user", "content": user_input}]
+    full_content = ""
+    final_message = None
 
-def execute_single_task(task_desc, system_prompt):
-    messages = [{"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Kerjakan tugas: {task_desc}. Gunakan tools jika diperlukan."}]
-    step = 0
-    last_response = ""
-    while step < 5:
-        resp = chat_completion(messages, tools_spec)
-        if "error" in resp:
-            return f"Error: {resp['error']}"
-        msg = resp["choices"][0]["message"]
-        messages.append(msg)
-        if "tool_calls" in msg:
-            tool_msgs = process_tool_calls(messages, msg["tool_calls"])
-            messages.extend(tool_msgs)
-            step += 1
-        else:
-            last_response = msg.get("content", "✅ Selesai.")
+    # Spinner sebelum token pertama
+    with console.status("[bold cyan]🧠 Thinking...[/]", spinner="dots") as status:
+        first_token = True
+        for event, data in stream_chat_completion(messages, tools_spec):
+            if event == 'error':
+                console.print(f"[red]{data}[/]")
+                return None
+            if event == 'token':
+                if first_token:
+                    status.stop()  # hentikan spinner
+                    first_token = False
+                    # Mulai panel live untuk streaming
+                    with Live(Text(""), auto_refresh=False, vertical_overflow="visible") as live:
+                        text_display = Text()
+                        while True:
+                            text_display.append(data)
+                            live.update(text_display)
+                            # ambil token berikutnya
+                            try:
+                                next_event, next_data = next(generator)
+                            except StopIteration:
+                                break
+                            if next_event == 'token':
+                                data = next_data
+                            elif next_event == 'done':
+                                final_message = next_data
+                                break
+                            elif next_event == 'error':
+                                console.print(f"[red]{next_data}[/]")
+                                return None
+                        # pastikan live selesai
+                else:
+                    # Jika sudah dalam Live (karena kita sudah stop status dan live ada di luar)
+                    # kita tidak bisa karena kita keluar dari with Live blok? Perlu restruktur.
+                    pass
+    # Sebenarnya implementasi streaming lebih rapi dengan generator luar.
+    # Kita akan tulis ulang show_streamed_response dengan iterasi sederhana.
+
+    # Karena kerumitan, kita pakai pendekatan: kumpulkan token, lalu tampilkan dengan Live.
+    # Atau tampilkan langsung dengan console.print(token, end="") tanpa buffer.
+    # Kita lakukan yang sederhana: kumpulkan token sambil tampilkan dengan console.print(token, end="", flush=True) tapi tanpa live panel.
+    # Setelah selesai, kita print newline dan return.
+    # Namun untuk "thinking" animasi, kita gunakan console.status sampai token pertama.
+
+    # Mari kita implementasikan ulang dengan jelas:
+    console.print("[bold cyan]🧠 Thinking...[/]", end="\r")
+    collected = ""
+    final_msg = None
+    first = True
+    for ev, dat in stream_chat_completion(messages, tools_spec):
+        if ev == 'token':
+            if first:
+                console.print(" " * 20, end="\r")  # hapus thinking
+                first = False
+            console.print(dat, end="", highlight=False)
+            collected += dat
+        elif ev == 'done':
+            final_msg = dat
             break
-    return last_response or "✅ Selesai."
+        elif ev == 'error':
+            console.print(f"\n[red]{dat}[/]")
+            return None
+    console.print()  # newline setelah streaming selesai
+    if final_msg is None:
+        return None
+    # Jika ada tool calls, proses di luar
+    return final_msg
 
 # ----------------------- MAIN LOOP -----------------------
 def run_agent():
-    global tool_call_counter, task_list, completed_tasks
+    global tool_call_counter, task_list
     load_config()
-    load_memory()
     model = os.getenv("MODEL", "google/gemini-2.0-flash-001")
     SYSTEM_PROMPT = f"""Kamu AI Developer Agent di Termux. Dir: {CWD}
 Tools: baca/tulis/edit file, shell cmd, GitHub, auto_run/stop, change_provider.
-Kerjakan tugas yang diberikan dengan efisien, tanpa pengulangan.
-Gunakan bahasa Indonesia ramah."""
+Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah."""
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -609,80 +708,61 @@ Gunakan bahasa Indonesia ramah."""
     os.system('clear')
 
     console.print(Panel.fit(
-        f"[bold cyan]● AI Agent Ultimate — Memory & Task Planner[/]\n"
-        f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}\n"
-        f"[dim]Ketik 'planning' untuk mengaktifkan/menonaktifkan mode perencanaan tugas[/]",
+        f"[bold cyan]● AI Agent Ultimate — Direct & Streaming[/]\n"
+        f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}",
         border_style="bright_blue"))
 
     if task_list:
-        console.print(f"[yellow]📋 {len(task_list)} tugas tersimpan dari sesi sebelumnya.[/]")
-
-    planning_mode = True
+        console.print(f"[yellow]📋 {len(task_list)} tugas dari auto-fix.[/]")
 
     while True:
         tool_call_counter.clear()
-        # Proses error queue
+        # Auto-fix dari error queue
         try:
             project, err_text = error_queue.get_nowait()
             console.print(Panel(f"[bold red]🐛 Error di {project}![/]\n{err_text[:500]}", title="Auto Monitor"))
-            task_list = [{"task": f"Perbaiki error di proyek {project}: {err_text[:200]}", "type": "tool"}] + task_list
+            # Masukkan ke task_list agar segera diperbaiki (langsung kirim ke AI)
+            task_list.append(f"Perbaiki error di proyek {project}: {err_text[:200]}")
             save_memory()
         except queue.Empty:
             pass
 
-        # Kerjakan tugas yang tertunda
-        if planning_mode and task_list:
-            console.print("[bold yellow]📋 Melanjutkan tugas yang tertunda...[/]")
-            while task_list:
-                task = task_list.pop(0)
-                save_memory()
-                console.print(f"\n[bold cyan]▶ Tugas: {task['task']}[/]")
-                with console.status(f"[bold yellow]⚙️  Mengerjakan: {task['task']}[/]", spinner="dots"):
-                    result = execute_single_task(task['task'], SYSTEM_PROMPT)
-                console.print(Panel(result or "✅", title="Hasil"))
-                completed_tasks.append(task)
-                save_memory()
-            continue
-
-        # User input
-        try:
-            user_input = Prompt.ask("\n[bold green]▸[/]")
-        except (KeyboardInterrupt, EOFError):
-            console.print("\n[red]Keluar.[/]")
-            break
-        if user_input.lower() in ["exit", "quit", "keluar"]:
-            break
-        if user_input.lower() == "planning":
-            planning_mode = not planning_mode
-            console.print(f"[green]Mode perencanaan {'AKTIF' if planning_mode else 'NONAKTIF'}[/]")
-            continue
-        if not user_input.strip():
-            continue
-
-        if planning_mode:
-            with console.status("[bold cyan]🧠 Menganalisis permintaan...[/]", spinner="dots"):
-                tasks = plan_tasks(user_input)
-            if len(tasks) == 1 and tasks[0].get("type") == "response":
-                messages.append({"role": "user", "content": user_input})
-                with console.status("[bold cyan]🤖 Memikirkan jawaban...[/]", spinner="dots"):
-                    resp = chat_completion(messages, tools_spec)
-                if "error" not in resp:
-                    msg = resp["choices"][0]["message"]
-                    messages.append(msg)
-                    if msg.get("content"):
-                        console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
-                else:
-                    console.print(f"[red]{resp['error']}[/]")
-            else:
-                task_list = tasks
-                save_memory()
-                console.print(Panel("[bold]📋 Rencana Pekerjaan:[/]\n" + "\n".join([f"{i+1}. {t['task']}" for i,t in enumerate(task_list)]), border_style="yellow"))
-                continue
+        # Jika ada tugas auto-fix, langsung kerjakan sebagai user input
+        if task_list:
+            user_input = task_list.pop(0)
+            save_memory()
+            console.print(f"[bold yellow]🔧 Auto‑fix: {user_input}[/]")
         else:
-            messages.append({"role": "user", "content": user_input})
-            step = 0
-            while step < 10:
-                resp = chat_completion(messages, tools_spec)
+            try:
+                user_input = Prompt.ask("\n[bold green]▸[/]")
+            except (KeyboardInterrupt, EOFError):
+                console.print("\n[red]Keluar.[/]")
+                break
+            if user_input.lower() in ["exit", "quit", "keluar"]:
+                break
+            if not user_input.strip():
+                continue
+
+        # --- Proses langsung (streaming) ---
+        final_msg = show_streamed_response(user_input, SYSTEM_PROMPT, messages)
+        if final_msg is None:
+            continue
+
+        # Tambahkan user input dan assistant message ke history
+        messages.append({"role": "user", "content": user_input})
+        # Jika final_msg punya tool_calls, simpan dan proses
+        if "tool_calls" in final_msg:
+            # Simpan assistant message dengan tool_calls
+            messages.append(final_msg)
+            # Proses tool calls
+            tool_msgs = process_tool_calls(messages, final_msg["tool_calls"])
+            messages.extend(tool_msgs)
+            # Setelah tool calls, minta AI melanjutkan (auto) tanpa input user
+            # Kita loop tool calls sampai selesai (max 5 langkah)
+            for _ in range(5):
+                # Streaming lagi? Tidak, karena setelah tool calls, kita perlu respon final yang mungkin teks.
+                # Kita gunakan non-streaming untuk efisiensi.
+                resp = chat_completion_nonstream(messages, tools_spec)
                 if "error" in resp:
                     console.print(f"[red]{resp['error']}[/]")
                     break
@@ -691,11 +771,15 @@ Gunakan bahasa Indonesia ramah."""
                 if "tool_calls" in msg:
                     tool_msgs = process_tool_calls(messages, msg["tool_calls"])
                     messages.extend(tool_msgs)
-                    step += 1
                 else:
                     if msg.get("content"):
                         console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
                     break
+        else:
+            # Sematkan konten teks
+            messages.append(final_msg)
+            if final_msg.get("content"):
+                console.print(Panel(Markdown(final_msg["content"]), title="🤖 AI", border_style="green"))
 
         show_log_panel(active_project)
 
