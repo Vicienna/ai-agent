@@ -103,6 +103,41 @@ Tagent mendukung banyak provider. Pilih saat setup atau ganti langsung dari chat
 
 ---
 
+### 🐧 Setup Ollama (Opsional untuk Provider Lokal)
+
+Jika ingin menjalankan Tagent dengan model AI lokal melalui Ollama, ikuti langkah berikut.
+
+1. **Instal Ollama**  
+   ```bash
+   curl -fsSL https://ollama.com/install.sh | sh
+   ```
+   > Di Termux, kamu mungkin perlu terlebih dahulu memasang `proot-distro` dan menjalankan distribusi Linux (seperti Ubuntu) untuk menginstal Ollama, atau menggunakan Termux dengan `pkg install ollama` jika tersedia di repo komunitas.
+
+2. **Jalankan server Ollama**  
+   Buka terminal baru (atau jalankan di background) dan eksekusi:
+   ```bash
+   ollama serve
+   ```
+   Server akan mendengarkan di `http://localhost:11434`.
+
+3. **Unduh model yang ingin dipakai**  
+   ```bash
+   ollama pull nemotron-3-super:cloud
+   ```
+   Kamu bisa mengganti `nemotron-3-super:cloud` dengan model lain yang tersedia di [pustaka Ollama](https://ollama.com/library).
+
+4. **Konfigurasi Tagent**  
+   Saat wizard setup, pilih **Ollama (Local)** sebagai provider, lalu masukkan nama model yang sudah diunduh (misal `nemotron-3-super:cloud`).  
+   Atau dari dalam chat:  
+   ```
+   ▸ change_provider provider="Ollama (Local)" model="nemotron-3-super:cloud"
+   ```
+
+5. **Selesai!**  
+   Tagent sekarang akan menggunakan model lokalmu. Tidak ada biaya API dan semua pemrosesan dilakukan di perangkatmu sendiri.
+
+---
+
 ## 🎬 Demo Singkat
 
 ```
