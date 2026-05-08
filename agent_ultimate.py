@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI Agent Ultimate – Fixed: no double response, thinking only when reasoning exists
+AI Agent Ultimate – Cancel Feature + All previous fixes
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -518,7 +518,7 @@ def process_tool_calls(messages, tool_calls):
                 threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
     return new_msgs
 
-# ---------- DISPLAY STREAMING + TIMER (FIXED: thinking only, no double content) ----------
+# ---------- DISPLAY STREAMING + TIMER + CANCEL ----------
 def display_stream(messages):
     start_time = time.time()
     thinking_text = ""
@@ -532,7 +532,6 @@ def display_stream(messages):
         timer_str = f"⏱ {elapsed:.1f}s"
         panel_text = Text()
         if has_thinking:
-            # Hanya tampilkan thinking process
             panel_text.append("🧠 Thinking Process (", style="bold cyan")
             panel_text.append(timer_str, style="bold magenta")
             panel_text.append(")\n", style="bold cyan")
@@ -540,32 +539,33 @@ def display_stream(messages):
             panel_text.append(thinking_text, style="dim cyan")
             panel_text.append("\n" + "─"*50, style="dim")
         else:
-            # Tidak ada thinking, hanya timer
             panel_text.append("🧠 Thinking... ", style="bold yellow")
             panel_text.append(timer_str, style="bold magenta")
+        panel_text.append("\n[red](Ctrl+C untuk batal)[/]", style="dim")
         return Panel(panel_text, border_style="blue", title="Streaming")
 
-    # Live display
-    with Live(render(), refresh_per_second=8, vertical_overflow="visible") as live:
-        for ev, data in stream_chat_completion(messages, tools_spec):
-            if ev == 'thinking':
-                has_thinking = True
-                thinking_text += data
-                live.update(render())
-            elif ev == 'content':
-                if not first_content_time:
-                    first_content_time = time.time()
-                content_text += data
-                # Jika ada thinking, update render (tapi tanpa menampilkan konten)
-                live.update(render())
-            elif ev == 'error':
-                console.print(f"[red]{data}[/]")
-                return None
-            elif ev == 'done':
-                final_msg = data
-                break
+    try:
+        with Live(render(), refresh_per_second=8, vertical_overflow="visible") as live:
+            for ev, data in stream_chat_completion(messages, tools_spec):
+                if ev == 'thinking':
+                    has_thinking = True
+                    thinking_text += data
+                    live.update(render())
+                elif ev == 'content':
+                    if not first_content_time:
+                        first_content_time = time.time()
+                    content_text += data
+                    live.update(render())
+                elif ev == 'error':
+                    console.print(f"[red]{data}[/]")
+                    return None, ""
+                elif ev == 'done':
+                    final_msg = data
+                    break
+    except KeyboardInterrupt:
+        console.print("\n[red]⚠ Dibatalkan.[/]")
+        return None, ""
 
-    # Waktu selesai
     end_time = time.time()
     think_dur = (first_content_time or end_time) - start_time
     total_dur = end_time - start_time
@@ -597,7 +597,7 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
     console.print(Panel.fit(
         f"[bold cyan]● AI Agent Ultimate[/]\n"
         f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}\n"
-        f"[dim]Fitur: Auto Run/Fix | Log Panel | Anti‑Pengulangan | Ganti Provider | Live Thinking Timer[/]",
+        f"[dim]Fitur: Auto Run/Fix | Log Panel | Anti‑Pengulangan | Ganti Provider | Live Thinking Timer | Cancel (Ctrl+C)[/]",
         border_style="bright_blue"))
 
     if task_list:
@@ -628,31 +628,43 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
             if not user_input.strip():
                 continue
 
+        # Simpan user message dulu, bisa dihapus jika nanti dibatalkan
         messages.append({"role":"user","content":user_input})
+        msg_index = len(messages) - 1  # posisi
 
         final_msg, content = display_stream(messages)
         if final_msg is None:
+            # Batal atau error, hapus user message terakhir
+            if len(messages) > msg_index:
+                del messages[msg_index]
             continue
 
-        # Tampilkan konten (hanya jika tidak ada tool calls)
+        # Jika ada tool calls, jalankan tool dan lanjutkan
         if "tool_calls" in final_msg:
             messages.append(final_msg)
-            tool_msgs = process_tool_calls(messages, final_msg["tool_calls"])
-            messages.extend(tool_msgs)
-            for _ in range(5):
-                resp = chat_completion_nonstream(messages, tools_spec)
-                if "error" in resp:
-                    console.print(f"[red]{resp['error']}[/]")
-                    break
-                msg = resp["choices"][0]["message"]
-                messages.append(msg)
-                if "tool_calls" in msg:
-                    tool_msgs = process_tool_calls(messages, msg["tool_calls"])
-                    messages.extend(tool_msgs)
-                else:
-                    if msg.get("content"):
-                        console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
-                    break
+            try:
+                tool_msgs = process_tool_calls(messages, final_msg["tool_calls"])
+                messages.extend(tool_msgs)
+                for _ in range(5):
+                    resp = chat_completion_nonstream(messages, tools_spec)
+                    if "error" in resp:
+                        console.print(f"[red]{resp['error']}[/]")
+                        break
+                    msg = resp["choices"][0]["message"]
+                    messages.append(msg)
+                    if "tool_calls" in msg:
+                        tool_msgs = process_tool_calls(messages, msg["tool_calls"])
+                        messages.extend(tool_msgs)
+                    else:
+                        if msg.get("content"):
+                            console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
+                        break
+            except KeyboardInterrupt:
+                console.print("\n[red]⚠ Dibatalkan saat eksekusi tools.[/]")
+                # Hapus user message terakhir dan semua hasil tool yang sudah ditambahkan
+                # Kembalikan pesan ke sebelum user_input
+                del messages[msg_index:]
+                continue
         else:
             messages.append(final_msg)
             if content:
