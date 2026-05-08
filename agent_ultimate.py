@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI Agent Ultimate – Live Thinking Timer (fixed) + Multi-Provider
+AI Agent Ultimate – Fixed: no double response, thinking only when reasoning exists
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -121,7 +121,6 @@ def run_setup():
     else:
         set_key(ENV_FILE, "API_BASE_URL", provider["base"])
 
-    # Model
     if choice == "1":
         model = Prompt.ask("Model (contoh: gpt-4o)", default="gpt-4o")
     elif choice == "2":
@@ -142,7 +141,6 @@ def run_setup():
         model = Prompt.ask("ID model")
     set_key(ENV_FILE, "MODEL", model)
 
-    # GitHub token (opsional)
     gh_token = password_prompt("\n🔐 GitHub Token (opsional, Enter skip): ")
     if gh_token.strip():
         try:
@@ -249,7 +247,6 @@ def stream_chat_completion(messages, tools=None):
         final_msg = {"role":"assistant","content":content}
         if thinking: final_msg["thinking"] = thinking
         if tool_calls:
-            # JANGAN mengubah arguments menjadi dict, biarkan string!
             final_msg["tool_calls"] = tool_calls
         yield ('done', final_msg)
     except requests.exceptions.RequestException as e:
@@ -497,7 +494,6 @@ def process_tool_calls(messages, tool_calls):
     new_msgs = []
     for tc in tool_calls:
         func_name = tc["function"]["name"]
-        # arguments mungkin string atau dict (dari API bisa string)
         args = tc["function"]["arguments"]
         if isinstance(args, str):
             try: args = json.loads(args)
@@ -522,9 +518,9 @@ def process_tool_calls(messages, tool_calls):
                 threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
     return new_msgs
 
-# ---------- DISPLAY STREAMING + LIVE TIMER (FIXED) ----------
+# ---------- DISPLAY STREAMING + TIMER (FIXED: thinking only, no double content) ----------
 def display_stream(messages):
-    start = time.time()
+    start_time = time.time()
     thinking_text = ""
     content_text = ""
     has_thinking = False
@@ -532,11 +528,11 @@ def display_stream(messages):
     first_content_time = None
 
     def render():
-        elapsed = time.time() - start
+        elapsed = time.time() - start_time
         timer_str = f"⏱ {elapsed:.1f}s"
-        # Bangun Text tanpa markup bermasalah
         panel_text = Text()
         if has_thinking:
+            # Hanya tampilkan thinking process
             panel_text.append("🧠 Thinking Process (", style="bold cyan")
             panel_text.append(timer_str, style="bold magenta")
             panel_text.append(")\n", style="bold cyan")
@@ -544,14 +540,12 @@ def display_stream(messages):
             panel_text.append(thinking_text, style="dim cyan")
             panel_text.append("\n" + "─"*50, style="dim")
         else:
+            # Tidak ada thinking, hanya timer
             panel_text.append("🧠 Thinking... ", style="bold yellow")
             panel_text.append(timer_str, style="bold magenta")
-        if content_text:
-            if has_thinking:
-                panel_text.append("\n\n💬 Response:\n", style="bold green")
-            panel_text.append(content_text, style="white")
         return Panel(panel_text, border_style="blue", title="Streaming")
 
+    # Live display
     with Live(render(), refresh_per_second=8, vertical_overflow="visible") as live:
         for ev, data in stream_chat_completion(messages, tools_spec):
             if ev == 'thinking':
@@ -562,6 +556,7 @@ def display_stream(messages):
                 if not first_content_time:
                     first_content_time = time.time()
                 content_text += data
+                # Jika ada thinking, update render (tapi tanpa menampilkan konten)
                 live.update(render())
             elif ev == 'error':
                 console.print(f"[red]{data}[/]")
@@ -569,13 +564,18 @@ def display_stream(messages):
             elif ev == 'done':
                 final_msg = data
                 break
-    end = time.time()
-    think_dur = (first_content_time or end) - start
+
+    # Waktu selesai
+    end_time = time.time()
+    think_dur = (first_content_time or end_time) - start_time
+    total_dur = end_time - start_time
+
     if has_thinking:
-        console.print(f"[bold magenta]⏱ Thinking selesai dalam {think_dur:.1f}s (total {end-start:.1f}s)[/]")
+        console.print(f"[bold magenta]⏱ Thinking selesai dalam {think_dur:.1f}s (total {total_dur:.1f}s)[/]")
     else:
-        console.print(f"[bold magenta]⏱ Response time: {end-start:.1f}s[/]")
-    return final_msg
+        console.print(f"[bold magenta]⏱ Response time: {total_dur:.1f}s[/]")
+
+    return final_msg, content_text
 
 # ---------- MAIN ----------
 def run_agent():
@@ -630,11 +630,11 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
 
         messages.append({"role":"user","content":user_input})
 
-        final_msg = display_stream(messages)
+        final_msg, content = display_stream(messages)
         if final_msg is None:
             continue
 
-        # Jika ada tool_calls (arguments tetap string)
+        # Tampilkan konten (hanya jika tidak ada tool calls)
         if "tool_calls" in final_msg:
             messages.append(final_msg)
             tool_msgs = process_tool_calls(messages, final_msg["tool_calls"])
@@ -655,8 +655,8 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
                     break
         else:
             messages.append(final_msg)
-            if final_msg.get("content"):
-                console.print(Panel(Markdown(final_msg["content"]), title="🤖 AI", border_style="green"))
+            if content:
+                console.print(Panel(Markdown(content), title="🤖 AI", border_style="green"))
 
         show_log_panel(active_project)
 
