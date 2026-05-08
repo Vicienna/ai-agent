@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI Agent Ultimate – Full Featured + Live Streaming Thinking Timer + Multi-Provider
+AI Agent Ultimate – Live Thinking Timer (fixed) + Multi-Provider
 """
 
-import os, sys, subprocess, json, time, hashlib, queue, threading, re
+import os, sys, subprocess, json, time, hashlib, queue, threading
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -79,20 +79,20 @@ def check_and_update():
         resp = requests.get(GITHUB_RAW_URL, timeout=10)
         if resp.status_code != 200:
             return False
-        remote_content = resp.text
-        local_content = SCRIPT_PATH.read_text()
-        if hashlib.md5(remote_content.encode()).hexdigest() != hashlib.md5(local_content.encode()).hexdigest():
+        remote = resp.text
+        local = SCRIPT_PATH.read_text()
+        if hashlib.md5(remote.encode()).hexdigest() != hashlib.md5(local.encode()).hexdigest():
             console.print("[bold cyan]🔃 Update tersedia! Memperbarui...[/]")
-            SCRIPT_PATH.write_text(remote_content)
-            console.print("[bold green]✅ Script sudah diperbarui. Restart...[/]")
+            SCRIPT_PATH.write_text(remote)
+            console.print("[bold green]✅ Script diperbarui. Restart...[/]")
             os.execv(sys.executable, [sys.executable] + sys.argv)
         return True
     except:
         return True
 
-# ----------------------- SETUP WIZARD -----------------------
+# ----------------------- SETUP WIZARD (singkat) -----------------------
 def run_setup():
-    console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard[/]", border_style="bright_blue"))
+    console.print(Panel.fit("[bold cyan]🛠️ Setup Wizard[/]", border_style="bright_blue"))
     providers = {
         "1": {"name": "OpenAI", "base": "https://api.openai.com/v1", "key_link": "https://platform.openai.com/api-keys"},
         "2": {"name": "OpenRouter", "base": "https://openrouter.ai/api/v1", "key_link": "https://openrouter.ai/keys"},
@@ -106,7 +106,6 @@ def run_setup():
     provider = providers[choice]
 
     if provider["name"] == "Ollama (Local)":
-        console.print("[dim]Ollama lokal tidak memerlukan API key.[/]")
         api_key = ""
     else:
         console.print(f"\n[bold]API Key {provider['name']}[/]")
@@ -122,88 +121,56 @@ def run_setup():
     else:
         set_key(ENV_FILE, "API_BASE_URL", provider["base"])
 
-    # Model selection
-    console.print("\n[bold]Pilih Model[/]")
-    if choice == "1":  # OpenAI
-        models = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "Custom"]
-        for i, m in enumerate(models, 1):
-            console.print(f"  {i}. {m}")
-        model_choice = Prompt.ask("Pilih nomor", choices=[str(i) for i in range(1, len(models)+1)], default="1")
-        if models[int(model_choice)-1] == "Custom":
-            model = Prompt.ask("ID model")
-        else:
-            model = models[int(model_choice)-1]
-    elif choice == "2":  # OpenRouter
-        console.print("[bold green]ℹ Model berikut teruji mendukung semua fitur agent:[/]")
-        console.print("  1. google/gemini-2.0-flash-001 ✅ (gratis, direkomendasikan)")
-        console.print("  2. openai/gpt-4o (butuh kredit)")
-        console.print("  3. anthropic/claude-3.5-sonnet (butuh kredit)")
-        console.print("  4. Custom")
-        model_choice = Prompt.ask("Pilih nomor", choices=["1","2","3","4"], default="1")
-        if model_choice == "1":
-            model = "google/gemini-2.0-flash-001"
-        elif model_choice == "2":
-            model = "openai/gpt-4o"
-        elif model_choice == "3":
-            model = "anthropic/claude-3.5-sonnet"
-        else:
-            model = Prompt.ask("Masukkan ID model")
-    elif choice == "3":  # Groq
-        console.print("  1. llama-3.1-70b-versatile")
-        console.print("  2. mixtral-8x7b-32768")
-        console.print("  3. gemma2-9b-it")
-        console.print("  4. Custom")
-        model_choice = Prompt.ask("Pilih nomor", choices=["1","2","3","4"], default="1")
-        if model_choice == "1":
-            model = "llama-3.1-70b-versatile"
-        elif model_choice == "2":
-            model = "mixtral-8x7b-32768"
-        elif model_choice == "3":
-            model = "gemma2-9b-it"
-        else:
-            model = Prompt.ask("Masukkan ID model")
-    elif choice == "4":  # Ollama
-        model = Prompt.ask("Nama model (contoh: nemotron-3-super:cloud)", default="nemotron-3-super:cloud")
-    else:  # Custom
+    # Model
+    if choice == "1":
+        model = Prompt.ask("Model (contoh: gpt-4o)", default="gpt-4o")
+    elif choice == "2":
+        console.print("[bold green]Model rekomendasi:[/]")
+        console.print("1. google/gemini-2.0-flash-001 (gratis)")
+        console.print("2. openai/gpt-4o")
+        console.print("3. anthropic/claude-3.5-sonnet")
+        console.print("4. Custom")
+        mc = Prompt.ask("Pilih", choices=["1","2","3","4"], default="1")
+        model = {"1":"google/gemini-2.0-flash-001","2":"openai/gpt-4o","3":"anthropic/claude-3.5-sonnet"}.get(mc) or Prompt.ask("ID model")
+    elif choice == "3":
+        console.print("1. llama-3.1-70b-versatile\n2. mixtral-8x7b-32768\n3. gemma2-9b-it\n4. Custom")
+        mc = Prompt.ask("Pilih", choices=["1","2","3","4"], default="1")
+        model = {"1":"llama-3.1-70b-versatile","2":"mixtral-8x7b-32768","3":"gemma2-9b-it"}.get(mc) or Prompt.ask("ID model")
+    elif choice == "4":
+        model = Prompt.ask("Nama model", default="nemotron-3-super:cloud")
+    else:
         model = Prompt.ask("ID model")
     set_key(ENV_FILE, "MODEL", model)
 
-    # GitHub Token
-    console.print("\n[bold]🔐 GitHub Token (Opsional)[/]")
-    github_token = password_prompt("GitHub Token: ")
-    if github_token.strip():
+    # GitHub token (opsional)
+    gh_token = password_prompt("\n🔐 GitHub Token (opsional, Enter skip): ")
+    if gh_token.strip():
         try:
-            login_res = subprocess.run(["gh", "auth", "login", "--with-token"], input=github_token, text=True, capture_output=True)
-            if login_res.returncode == 0:
-                console.print("[green]✓ Login gh berhasil.[/]")
-                user_res = subprocess.run(["gh", "api", "user"], capture_output=True, text=True)
-                if user_res.returncode == 0:
-                    user_data = json.loads(user_res.stdout)
-                    github_username = user_data.get("login")
-                    github_email = user_data.get("email") or f"{github_username}@users.noreply.github.com"
-                    github_name = user_data.get("name") or github_username
-                    set_key(ENV_FILE, "GITHUB_USER", github_username)
-                    os.environ["GITHUB_USER"] = github_username
-                    subprocess.run(["git", "config", "--global", "user.name", github_name], check=False)
-                    subprocess.run(["git", "config", "--global", "user.email", github_email], check=False)
-        except Exception as e:
-            console.print(f"[red]Error: {e}[/]")
+            subprocess.run(["gh","auth","login","--with-token"], input=gh_token, text=True, capture_output=True, check=True)
+            user_res = subprocess.run(["gh","api","user"], capture_output=True, text=True)
+            if user_res.returncode == 0:
+                data = json.loads(user_res.stdout)
+                set_key(ENV_FILE, "GITHUB_USER", data["login"])
+                os.environ["GITHUB_USER"] = data["login"]
+                subprocess.run(["git","config","--global","user.name", data.get("name", data["login"])])
+                subprocess.run(["git","config","--global","user.email", data.get("email","")])
+        except:
+            pass
     else:
         try:
-            subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
-            console.print("[green]✓ gh CLI sudah login.[/]")
+            subprocess.run(["gh","auth","status"], check=True, capture_output=True)
         except:
-            console.print("[yellow]⚠ gh CLI belum login.[/]")
+            console.print("[yellow]⚠ gh CLI belum login[/]")
+
     d = Prompt.ask("Direktori kerja (kosongkan = sekarang)")
     if d.strip():
         set_key(ENV_FILE, "WORK_DIR", d)
     console.print("[green]✅ Setup selesai![/]")
 
-# ----------------------- LOAD CONFIG -----------------------
 def load_config():
     if ENV_FILE.exists():
         load_dotenv(ENV_FILE)
-    if not os.getenv("API_KEY") and not os.getenv("API_PROVIDER", "").startswith("Ollama"):
+    if not os.getenv("API_KEY") and not os.getenv("API_PROVIDER","").startswith("Ollama"):
         run_setup()
         load_dotenv(ENV_FILE, override=True)
     work_dir = os.getenv("WORK_DIR")
@@ -213,7 +180,7 @@ def load_config():
     CWD = Path.cwd()
     if not os.getenv("GITHUB_USER"):
         try:
-            res = subprocess.run(["gh", "api", "user"], capture_output=True, text=True)
+            res = subprocess.run(["gh","api","user"], capture_output=True, text=True)
             if res.returncode == 0:
                 login = json.loads(res.stdout).get("login")
                 if login:
@@ -223,29 +190,21 @@ def load_config():
             pass
     load_memory()
 
-# ----------------------- API CLIENT (streaming + thinking) -----------------------
+# ---------- API ----------
 def normalize_api_url(base):
     base = base.rstrip('/')
     return base if base.endswith('/chat/completions') else f"{base}/chat/completions"
 
-def stream_chat_completion_with_thinking(messages, tools=None):
+def stream_chat_completion(messages, tools=None):
     api_key = os.getenv("API_KEY")
     base_url = os.getenv("API_BASE_URL")
-    provider = os.getenv("API_PROVIDER", "")
+    provider = os.getenv("API_PROVIDER","")
     model = os.getenv("MODEL")
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if "OpenRouter" in provider:
         headers["HTTP-Referer"] = "http://localhost"
         headers["X-Title"] = "AI-Agent"
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": 0.2,
-        "stream": True
-    }
+    payload = {"model": model, "messages": messages, "temperature": 0.2, "stream": True}
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
@@ -257,53 +216,40 @@ def stream_chat_completion_with_thinking(messages, tools=None):
         if resp.status_code != 200:
             yield ('error', f"HTTP {resp.status_code}: {resp.text[:300]}")
             return
-        content_collected = ""
-        thinking_collected = ""
+        content = ""
+        thinking = ""
         tool_calls = []
         for line in resp.iter_lines(decode_unicode=True):
-            if not line:
-                continue
+            if not line: continue
             if line.startswith("data: "):
                 data_str = line[6:]
                 if data_str.strip() == "[DONE]":
                     break
                 try:
                     obj = json.loads(data_str)
-                    delta = obj.get("choices", [{}])[0].get("delta", {})
-                    # Reasoning/thinking token
+                    delta = obj.get("choices",[{}])[0].get("delta",{})
                     reasoning = delta.get("reasoning") or delta.get("thinking") or delta.get("reasoning_content")
                     if reasoning:
-                        thinking_collected += reasoning
+                        thinking += reasoning
                         yield ('thinking', reasoning)
-                    # Content biasa
-                    content = delta.get("content")
-                    if content:
-                        content_collected += content
-                        yield ('content', content)
-                    # Tool calls
+                    if "content" in delta and delta["content"] is not None:
+                        content += delta["content"]
+                        yield ('content', delta["content"])
                     if "tool_calls" in delta:
                         for tc in delta["tool_calls"]:
-                            idx = tc.get("index", 0)
+                            idx = tc.get("index",0)
                             while len(tool_calls) <= idx:
-                                tool_calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-                            if tc.get("id"):
-                                tool_calls[idx]["id"] = tc["id"]
+                                tool_calls.append({"id":"","type":"function","function":{"name":"","arguments":""}})
+                            if tc.get("id"): tool_calls[idx]["id"] = tc["id"]
                             if tc.get("function"):
-                                if "name" in tc["function"]:
-                                    tool_calls[idx]["function"]["name"] = tc["function"]["name"]
-                                if "arguments" in tc["function"]:
-                                    tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
+                                if "name" in tc["function"]: tool_calls[idx]["function"]["name"] = tc["function"]["name"]
+                                if "arguments" in tc["function"]: tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
                 except json.JSONDecodeError:
                     pass
-        final_msg = {"role": "assistant", "content": content_collected}
-        if thinking_collected:
-            final_msg["thinking"] = thinking_collected
+        final_msg = {"role":"assistant","content":content}
+        if thinking: final_msg["thinking"] = thinking
         if tool_calls:
-            for tc in tool_calls:
-                try:
-                    tc["function"]["arguments"] = json.loads(tc["function"]["arguments"])
-                except:
-                    pass
+            # JANGAN mengubah arguments menjadi dict, biarkan string!
             final_msg["tool_calls"] = tool_calls
         yield ('done', final_msg)
     except requests.exceptions.RequestException as e:
@@ -312,12 +258,9 @@ def stream_chat_completion_with_thinking(messages, tools=None):
 def chat_completion_nonstream(messages, tools=None, max_retries=3):
     api_key = os.getenv("API_KEY")
     base_url = os.getenv("API_BASE_URL")
-    provider = os.getenv("API_PROVIDER", "")
+    provider = os.getenv("API_PROVIDER","")
     model = os.getenv("MODEL")
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if "OpenRouter" in provider:
         headers["HTTP-Referer"] = "http://localhost"
         headers["X-Title"] = "AI-Agent"
@@ -326,10 +269,7 @@ def chat_completion_nonstream(messages, tools=None, max_retries=3):
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
     session = requests.Session()
-    retries = Retry(total=max_retries, backoff_factor=1,
-                    status_forcelist=[429, 502, 503, 504],
-                    allowed_methods=["POST"],
-                    respect_retry_after_header=True)
+    retries = Retry(total=max_retries, backoff_factor=1, status_forcelist=[429,502,503,504], allowed_methods=["POST"], respect_retry_after_header=True)
     session.mount("https://", HTTPAdapter(max_retries=retries))
     session.mount("http://", HTTPAdapter(max_retries=retries))
     url = normalize_api_url(base_url)
@@ -337,26 +277,25 @@ def chat_completion_nonstream(messages, tools=None, max_retries=3):
         try:
             resp = session.post(url, headers=headers, json=payload, timeout=120)
             if resp.status_code == 429:
-                retry_after = resp.headers.get("Retry-After")
-                wait = int(retry_after) if retry_after and retry_after.isdigit() else 10
-                console.print(f"[yellow]⏳ Rate limit 429. Menunggu {wait} detik...[/]")
+                wait = int(resp.headers.get("Retry-After",10))
+                console.print(f"[yellow]⏳ Rate limit 429, tunggu {wait}s[/]")
                 time.sleep(wait)
                 continue
             if resp.status_code != 200:
                 return {"error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
             return resp.json()
         except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
-            if attempt < max_retries - 1:
-                console.print(f"[yellow]⚠ Koneksi gagal, coba lagi ({attempt+2}/{max_retries})...[/]")
-                time.sleep(2 ** attempt)
+            if attempt < max_retries-1:
+                console.print(f"[yellow]⚠ Koneksi gagal, coba {attempt+2}/{max_retries}[/]")
+                time.sleep(2**attempt)
             else:
                 return {"error": f"Koneksi gagal: {e}"}
     return {"error": "Gagal"}
 
-# ----------------------- TOOLS -----------------------
+# ---------- TOOLS ----------
 def check_github():
     try:
-        subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
+        subprocess.run(["gh","auth","status"], check=True, capture_output=True)
         return True
     except:
         return False
@@ -364,36 +303,34 @@ def check_github():
 def ensure_git_identity():
     try:
         repo = git.Repo(CWD)
-        reader = repo.config_reader()
-        if not reader.has_option("user", "email") or not reader.has_option("user", "name"):
-            res = subprocess.run(["gh", "api", "user"], capture_output=True, text=True)
+        r = repo.config_reader()
+        if not r.has_option("user","email") or not r.has_option("user","name"):
+            res = subprocess.run(["gh","api","user"], capture_output=True, text=True)
             if res.returncode == 0:
-                data = json.loads(res.stdout)
-                email = data.get("email", "user@example.com")
-                name = data.get("name", data.get("login", "User"))
+                d = json.loads(res.stdout)
+                email = d.get("email","user@example.com")
+                name = d.get("name", d.get("login","User"))
             else:
                 email = "user@example.com"
                 name = "AI Agent User"
-            writer = repo.config_writer()
-            writer.set_value("user", "email", email)
-            writer.set_value("user", "name", name)
-            writer.release()
+            w = repo.config_writer()
+            w.set_value("user","email", email)
+            w.set_value("user","name", name)
+            w.release()
     except:
         pass
 
 def github_create_repo(name, private=False, description=""):
     ensure_git_identity()
-    cmd = ["gh", "repo", "create", name, "--push"]
-    if private: cmd.append("--private")
-    else: cmd.append("--public")
+    cmd = ["gh","repo","create",name,"--push"] + (["--private"] if private else ["--public"])
     if description: cmd.extend(["-d", description])
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, cwd=CWD)
         out = res.stdout.strip() or f"Repo {name} dibuat."
-        user = os.getenv("GITHUB_USER", "")
+        user = os.getenv("GITHUB_USER","")
         if user:
-            subprocess.run(["git", "remote", "remove", "origin"], capture_output=True, cwd=CWD)
-            subprocess.run(["git", "remote", "add", "origin", f"https://github.com/{user}/{name}.git"], capture_output=True, cwd=CWD)
+            subprocess.run(["git","remote","remove","origin"], capture_output=True, cwd=CWD)
+            subprocess.run(["git","remote","add","origin", f"https://github.com/{user}/{name}.git"], capture_output=True, cwd=CWD)
         return out
     except Exception as e:
         return f"ERROR: {e}"
@@ -405,15 +342,14 @@ def github_push(commit_msg="Update from AI Agent"):
         if repo.is_dirty(untracked_files=True):
             repo.git.add(A=True)
             repo.index.commit(commit_msg)
-            subprocess.run(["git", "push", "-u", "origin", "HEAD"], check=True, capture_output=True, cwd=CWD)
+            subprocess.run(["git","push","-u","origin","HEAD"], check=True, capture_output=True, cwd=CWD)
             return f"✅ Pushed: {commit_msg}"
         return "Tidak ada perubahan."
     except Exception as e:
         return f"ERROR: {e}"
 
 def github_clone(repo_url, target_dir=""):
-    cmd = ["gh", "repo", "clone", repo_url]
-    if target_dir: cmd.append(target_dir)
+    cmd = ["gh","repo","clone",repo_url] + ([target_dir] if target_dir else [])
     try:
         subprocess.run(cmd, check=True, capture_output=True, cwd=CWD)
         return f"Repo {repo_url} di-clone."
@@ -425,18 +361,15 @@ LOG_DIR.mkdir(exist_ok=True)
 
 def auto_run(command, project_name):
     global active_project
-    subprocess.run(["tmux", "kill-session", "-t", project_name], capture_output=True)
-    log_file = LOG_DIR / f"{project_name}.log"
-    subprocess.run([
-        "tmux", "new-session", "-d", "-s", project_name,
-        f"bash -c '{command} 2>&1 | tee {log_file}'"
-    ])
+    subprocess.run(["tmux","kill-session","-t",project_name], capture_output=True)
+    log = LOG_DIR / f"{project_name}.log"
+    subprocess.run(["tmux","new-session","-d","-s",project_name, f"bash -c '{command} 2>&1 | tee {log}'"])
     active_project = project_name
-    return f"Proyek {project_name} dijalankan. Log: {log_file}"
+    return f"Proyek {project_name} dijalankan. Log: {log}"
 
 def auto_stop(project_name):
     global active_project
-    subprocess.run(["tmux", "kill-session", "-t", project_name], capture_output=True)
+    subprocess.run(["tmux","kill-session","-t",project_name], capture_output=True)
     if active_project == project_name:
         active_project = None
     return f"Sesi {project_name} dihentikan."
@@ -444,39 +377,32 @@ def auto_stop(project_name):
 error_queue = queue.Queue()
 
 def monitor_logs(project_name):
-    log_file = LOG_DIR / f"{project_name}.log"
-    if not log_file.exists():
-        return
-    last_size = 0
+    log = LOG_DIR / f"{project_name}.log"
+    if not log.exists(): return
+    last = 0
     while True:
         time.sleep(2)
-        if not log_file.exists():
-            continue
+        if not log.exists(): continue
         try:
-            current_size = log_file.stat().st_size
-            if current_size > last_size:
-                with open(log_file, 'r') as f:
-                    f.seek(last_size)
-                    new_content = f.read()
-                last_size = current_size
-                if any(kw in new_content for kw in ["Traceback", "Error", "error", "FATAL"]):
-                    error_queue.put((project_name, new_content))
+            cur = log.stat().st_size
+            if cur > last:
+                with open(log,'r') as f:
+                    f.seek(last)
+                    new = f.read()
+                last = cur
+                if any(k in new for k in ["Traceback","Error","error","FATAL"]):
+                    error_queue.put((project_name, new))
         except:
             pass
 
 def show_log_panel(project_name, lines=10):
-    if not project_name:
-        return
-    log_file = LOG_DIR / f"{project_name}.log"
-    if not log_file.exists():
-        return
+    if not project_name: return
+    log = LOG_DIR / f"{project_name}.log"
+    if not log.exists(): return
     try:
-        with open(log_file, 'r') as f:
-            all_lines = f.readlines()
-        last_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
-        content = "".join(last_lines).rstrip()
-        if content:
-            console.print(Panel(content, title=f"📋 Log [{project_name}]", border_style="blue"))
+        lines_data = log.read_text().splitlines()[-lines:]
+        if lines_data:
+            console.print(Panel("\n".join(lines_data), title=f"📋 Log [{project_name}]", border_style="blue"))
     except:
         pass
 
@@ -491,22 +417,18 @@ def change_provider(provider=None, api_key=None, base_url=None, model=None):
 def change_directory(path):
     global CWD
     try:
-        new = (CWD / path).resolve()
-        if not new.is_dir():
-            return f"ERROR: {path} bukan direktori."
-        os.chdir(new)
-        CWD = new
+        new = (CWD/path).resolve()
+        if not new.is_dir(): return f"ERROR: {path} bukan direktori."
+        os.chdir(new); CWD = new
         return f"Pindah ke {CWD}"
-    except Exception as e:
-        return f"ERROR: {e}"
+    except Exception as e: return f"ERROR: {e}"
 
 def list_directory(path="."):
-    target = (CWD / path).resolve()
-    if not target.is_dir():
-        return f"ERROR: {path} bukan direktori."
+    target = (CWD/path).resolve()
+    if not target.is_dir(): return f"ERROR: {path} bukan direktori."
     items = os.listdir(target)
-    dirs = [d for d in items if (target / d).is_dir()]
-    files = [f for f in items if (target / f).is_file()]
+    dirs = [d for d in items if (target/d).is_dir()]
+    files = [f for f in items if (target/f).is_file()]
     res = ""
     if dirs: res += "[DIR] " + ", ".join(dirs) + "\n"
     if files: res += "[FILE] " + ", ".join(files)
@@ -515,29 +437,27 @@ def list_directory(path="."):
 def shell_command(cmd):
     try:
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60, cwd=CWD)
-        out = (res.stdout + res.stderr).strip()
-        return out if out else "(ok)"
-    except subprocess.TimeoutExpired:
-        return "ERROR: Timeout 60s"
-    except Exception as e:
-        return f"ERROR: {e}"
+        out = (res.stdout+res.stderr).strip()
+        return out or "(ok)"
+    except subprocess.TimeoutExpired: return "ERROR: Timeout"
+    except Exception as e: return f"ERROR: {e}"
 
 def read_file(path):
-    full = (CWD / path).resolve()
-    return full.read_text() if full.is_file() else f"ERROR: {path} tidak ditemukan."
+    f = (CWD/path).resolve()
+    return f.read_text() if f.is_file() else f"ERROR: {path} tidak ditemukan."
 
 def write_file(path, content):
-    full = (CWD / path).resolve()
-    full.parent.mkdir(parents=True, exist_ok=True)
-    full.write_text(content)
+    f = (CWD/path).resolve()
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(content)
     return f"✅ {path} ditulis ({len(content)} karakter)."
 
-def edit_file(path, old_str, new_str):
-    full = (CWD / path).resolve()
-    if not full.is_file(): return f"ERROR: {path} tidak ditemukan."
-    text = full.read_text()
-    if old_str not in text: return f"ERROR: string tidak ditemukan."
-    full.write_text(text.replace(old_str, new_str, 1))
+def edit_file(path, old, new):
+    f = (CWD/path).resolve()
+    if not f.is_file(): return f"ERROR: {path} tidak ditemukan."
+    text = f.read_text()
+    if old not in text: return "ERROR: string tidak ditemukan."
+    f.write_text(text.replace(old, new, 1))
     return f"✅ {path} diedit."
 
 tools_spec = [
@@ -570,23 +490,22 @@ tool_map = {
     "change_provider": change_provider,
 }
 
-MAX_REPEATED_CALLS = 3
+MAX_REPEATED = 3
 
 def process_tool_calls(messages, tool_calls):
     global tool_call_counter
     new_msgs = []
     for tc in tool_calls:
         func_name = tc["function"]["name"]
+        # arguments mungkin string atau dict (dari API bisa string)
         args = tc["function"]["arguments"]
         if isinstance(args, str):
-            try:
-                args = json.loads(args)
-            except:
-                pass
+            try: args = json.loads(args)
+            except: pass
         key = f"{func_name}:{json.dumps(args, sort_keys=True)}"
-        tool_call_counter[key] = tool_call_counter.get(key, 0) + 1
-        if tool_call_counter[key] > MAX_REPEATED_CALLS:
-            console.print(f"[red]⚠ {func_name} dipanggil >{MAX_REPEATED_CALLS}x. Diabaikan.[/]")
+        tool_call_counter[key] = tool_call_counter.get(key,0)+1
+        if tool_call_counter[key] > MAX_REPEATED:
+            console.print(f"[red]⚠ {func_name} diulang >{MAX_REPEATED}x. Diabaikan.[/]")
             result = f"❌ Tindakan '{func_name}' diabaikan."
         else:
             console.print(f"[dim]🔧 {func_name}[/]")
@@ -595,56 +514,54 @@ def process_tool_calls(messages, tool_calls):
                 result = func(**args) if func else "Tool tidak dikenal."
             except Exception as e:
                 result = f"ERROR: {e}"
-        console.print(Panel(Syntax(str(result), "text", theme="monokai"), title=f"📤 {func_name}"))
-        new_msgs.append({
-            "role": "tool",
-            "tool_call_id": tc.get("id", "manual"),
-            "name": func_name,
-            "content": str(result)
-        })
+        console.print(Panel(Syntax(str(result),"text",theme="monokai"), title=f"📤 {func_name}"))
+        new_msgs.append({"role":"tool","tool_call_id":tc.get("id","manual"),"name":func_name,"content":str(result)})
         if func_name == "auto_run":
             project = args.get("project_name")
             if project:
                 threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
     return new_msgs
 
-# ----------------------- DISPLAY STREAMING + LIVE THINKING TIMER -----------------------
-def display_stream_with_live_timer(messages):
+# ---------- DISPLAY STREAMING + LIVE TIMER (FIXED) ----------
+def display_stream(messages):
     start = time.time()
-    thinking = ""
-    content_out = ""
+    thinking_text = ""
+    content_text = ""
     has_thinking = False
     final_msg = None
     first_content_time = None
 
     def render():
-        now = time.time()
-        elapsed = now - start
-        timer = f"[bold magenta]⏱ {elapsed:.1f}s[/]"
-        text = Text()
+        elapsed = time.time() - start
+        timer_str = f"⏱ {elapsed:.1f}s"
+        # Bangun Text tanpa markup bermasalah
+        panel_text = Text()
         if has_thinking:
-            text.append(Text(f"🧠 Thinking Process ({timer})\n", style="bold cyan"))
-            text.append(Text("━" * 50 + "\n", style="dim"))
-            text.append(Text(thinking, style="dim cyan"))
-            text.append(Text("\n" + "━" * 50 + "\n\n", style="dim"))
+            panel_text.append("🧠 Thinking Process (", style="bold cyan")
+            panel_text.append(timer_str, style="bold magenta")
+            panel_text.append(")\n", style="bold cyan")
+            panel_text.append("─"*50 + "\n", style="dim")
+            panel_text.append(thinking_text, style="dim cyan")
+            panel_text.append("\n" + "─"*50, style="dim")
         else:
-            text.append(Text(f"🧠 Thinking... {timer}\n", style="bold yellow"))
-        if content_out:
+            panel_text.append("🧠 Thinking... ", style="bold yellow")
+            panel_text.append(timer_str, style="bold magenta")
+        if content_text:
             if has_thinking:
-                text.append(Text("💬 Response:\n", style="bold green"))
-            text.append(Text(content_out, style="white"))
-        return Panel(text, border_style="blue", title="Streaming")
+                panel_text.append("\n\n💬 Response:\n", style="bold green")
+            panel_text.append(content_text, style="white")
+        return Panel(panel_text, border_style="blue", title="Streaming")
 
     with Live(render(), refresh_per_second=8, vertical_overflow="visible") as live:
-        for ev, data in stream_chat_completion_with_thinking(messages, tools_spec):
+        for ev, data in stream_chat_completion(messages, tools_spec):
             if ev == 'thinking':
                 has_thinking = True
-                thinking += data
+                thinking_text += data
                 live.update(render())
             elif ev == 'content':
                 if not first_content_time:
                     first_content_time = time.time()
-                content_out += data
+                content_text += data
                 live.update(render())
             elif ev == 'error':
                 console.print(f"[red]{data}[/]")
@@ -652,26 +569,24 @@ def display_stream_with_live_timer(messages):
             elif ev == 'done':
                 final_msg = data
                 break
-    # Setelah streaming selesai, tampilkan waktu final
     end = time.time()
-    total = end - start
-    think_time = (first_content_time or end) - start
+    think_dur = (first_content_time or end) - start
     if has_thinking:
-        console.print(f"[bold magenta]⏱ Thinking selesai dalam {think_time:.1f}s (total {total:.1f}s)[/]")
+        console.print(f"[bold magenta]⏱ Thinking selesai dalam {think_dur:.1f}s (total {end-start:.1f}s)[/]")
     else:
-        console.print(f"[bold magenta]⏱ Response time: {total:.1f}s[/]")
+        console.print(f"[bold magenta]⏱ Response time: {end-start:.1f}s[/]")
     return final_msg
 
-# ----------------------- MAIN LOOP -----------------------
+# ---------- MAIN ----------
 def run_agent():
     global tool_call_counter, task_list
     load_config()
-    model = os.getenv("MODEL", "google/gemini-2.0-flash-001")
+    model = os.getenv("MODEL","google/gemini-2.0-flash-001")
     SYSTEM_PROMPT = f"""Kamu AI Developer Agent di Termux. Dir: {CWD}
 Tools: baca/tulis/edit file, shell cmd, GitHub, auto_run/stop, change_provider.
-Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah."""
+Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role":"system","content":SYSTEM_PROMPT}]
 
     os.system('clear')
     console.print("[dim]Memeriksa update...[/]")
@@ -682,18 +597,18 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
     console.print(Panel.fit(
         f"[bold cyan]● AI Agent Ultimate[/]\n"
         f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}\n"
-        f"[dim]Fitur: Auto Update | Auto Run | Auto Fix | Log Panel | Anti‑Pengulangan | Ganti Provider | Live Thinking Timer[/]",
+        f"[dim]Fitur: Auto Run/Fix | Log Panel | Anti‑Pengulangan | Ganti Provider | Live Thinking Timer[/]",
         border_style="bright_blue"))
 
     if task_list:
-        console.print(f"[yellow]📋 {len(task_list)} tugas dari auto-fix tertunda.[/]")
+        console.print(f"[yellow]📋 {len(task_list)} tugas auto‑fix.[/]")
 
     while True:
         tool_call_counter.clear()
         try:
-            project, err_text = error_queue.get_nowait()
-            console.print(Panel(f"[bold red]🐛 Error terdeteksi di {project}![/]\n{err_text[:500]}", title="Auto Monitor"))
-            task_list.append(f"Perbaiki error di proyek {project}: {err_text[:200]}")
+            proj, err = error_queue.get_nowait()
+            console.print(Panel(f"[red]🐛 Error di {proj}![/]\n{err[:500]}", title="Auto Monitor"))
+            task_list.append(f"Perbaiki error di {proj}: {err[:200]}")
             save_memory()
         except queue.Empty:
             pass
@@ -701,23 +616,25 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
         if task_list:
             user_input = task_list.pop(0)
             save_memory()
-            console.print(f"[bold yellow]🔧 Auto‑fix: {user_input}[/]")
+            console.print(f"[yellow]🔧 Auto‑fix: {user_input}[/]")
         else:
             try:
                 user_input = Prompt.ask("\n[bold green]▸[/]")
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[red]Keluar.[/]")
                 break
-            if user_input.lower() in ["exit", "quit", "keluar"]:
+            if user_input.lower() in ["exit","quit","keluar"]:
                 break
             if not user_input.strip():
                 continue
 
-        messages.append({"role": "user", "content": user_input})
+        messages.append({"role":"user","content":user_input})
 
-        final_msg = display_stream_with_live_timer(messages)
+        final_msg = display_stream(messages)
         if final_msg is None:
             continue
+
+        # Jika ada tool_calls (arguments tetap string)
         if "tool_calls" in final_msg:
             messages.append(final_msg)
             tool_msgs = process_tool_calls(messages, final_msg["tool_calls"])
