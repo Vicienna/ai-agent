@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI Agent Ultimate – Direct & Streaming (tanpa duplikasi + auto-capture tool JSON)
+AI Agent Ultimate – Direct Mode (no animation) — Anti-Pengulangan, Change Provider, Auto Everything
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -15,7 +15,7 @@ from rich.prompt import Prompt
 import git
 from dotenv import load_dotenv, set_key
 
-# ---------- password dengan bintang ----------
+# ---------- password input dengan bintang ----------
 def password_prompt(prompt_text="Password: "):
     import termios, tty
     console.print(prompt_text, end="")
@@ -48,7 +48,7 @@ active_project = None
 tool_call_counter = {}
 
 memory_file = Path(__file__).parent / "agent_memory.json"
-task_list = []
+task_list = []          # untuk auto-fix
 completed_tasks = []
 
 def load_memory():
@@ -67,6 +67,7 @@ def save_memory():
         "completed": completed_tasks
     }, indent=2))
 
+# ----------------------- AUTO UPDATE -----------------------
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Vicienna/ai-agent/main/agent_ultimate.py"
 SCRIPT_PATH = Path(__file__).resolve()
 
@@ -80,11 +81,13 @@ def check_and_update():
         if hashlib.md5(remote_content.encode()).hexdigest() != hashlib.md5(local_content.encode()).hexdigest():
             console.print("[bold cyan]🔃 Update tersedia! Memperbarui...[/]")
             SCRIPT_PATH.write_text(remote_content)
+            console.print("[bold green]✅ Script sudah diperbarui. Restart...[/]")
             os.execv(sys.executable, [sys.executable] + sys.argv)
         return True
     except:
         return True
 
+# ----------------------- SETUP WIZARD -----------------------
 def run_setup():
     console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard[/]", border_style="bright_blue"))
     providers = {
@@ -130,6 +133,7 @@ def run_setup():
         model = models[int(model_choice)-1]
     set_key(ENV_FILE, "MODEL", model)
 
+    # GitHub Token opsional
     console.print("\n[bold]🔐 GitHub Token (Opsional)[/]")
     github_token = password_prompt("GitHub Token: ")
     if github_token.strip():
@@ -160,6 +164,7 @@ def run_setup():
         set_key(ENV_FILE, "WORK_DIR", d)
     console.print("[green]✅ Setup selesai![/]")
 
+# ----------------------- LOAD CONFIG -----------------------
 def load_config():
     if ENV_FILE.exists():
         load_dotenv(ENV_FILE)
@@ -183,79 +188,20 @@ def load_config():
             pass
     load_memory()
 
+# ----------------------- API CLIENT (non-stream) -----------------------
 def normalize_api_url(base):
     base = base.rstrip('/')
     return base if base.endswith('/chat/completions') else f"{base}/chat/completions"
 
-def stream_chat_completion(messages, tools=None):
+def chat_completion(messages, tools=None, max_retries=3):
     api_key = os.getenv("API_KEY")
     base_url = os.getenv("API_BASE_URL")
     provider = os.getenv("API_PROVIDER", "")
     model = os.getenv("MODEL")
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    if "OpenRouter" in provider:
-        headers["HTTP-Referer"] = "http://localhost"
-        headers["X-Title"] = "AI-Agent"
-    payload = {"model": model, "messages": messages, "temperature": 0.2, "stream": True}
-    if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = "auto"
-
-    session = requests.Session()
-    url = normalize_api_url(base_url)
-    try:
-        resp = session.post(url, headers=headers, json=payload, stream=True, timeout=120)
-        if resp.status_code != 200:
-            yield ('error', f"HTTP {resp.status_code}: {resp.text[:300]}")
-            return
-        collected_content = ""
-        tool_calls = []
-        for line in resp.iter_lines(decode_unicode=True):
-            if not line:
-                continue
-            if line.startswith("data: "):
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
-                    break
-                try:
-                    obj = json.loads(data_str)
-                    delta = obj.get("choices", [{}])[0].get("delta", {})
-                    if "content" in delta and delta["content"] is not None:
-                        token = delta["content"]
-                        collected_content += token
-                        yield ('token', token)
-                    if "tool_calls" in delta:
-                        for tc in delta["tool_calls"]:
-                            idx = tc.get("index", 0)
-                            while len(tool_calls) <= idx:
-                                tool_calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
-                            if tc.get("id"):
-                                tool_calls[idx]["id"] = tc["id"]
-                            if tc.get("function"):
-                                if "name" in tc["function"]:
-                                    tool_calls[idx]["function"]["name"] = tc["function"]["name"]
-                                if "arguments" in tc["function"]:
-                                    tool_calls[idx]["function"]["arguments"] += tc["function"]["arguments"]
-                except json.JSONDecodeError:
-                    pass
-        final_msg = {"role": "assistant", "content": collected_content}
-        if tool_calls:
-            for tc in tool_calls:
-                try:
-                    tc["function"]["arguments"] = json.loads(tc["function"]["arguments"])
-                except:
-                    pass
-            final_msg["tool_calls"] = tool_calls
-        yield ('done', final_msg)
-    except requests.exceptions.RequestException as e:
-        yield ('error', f"Koneksi gagal: {e}")
-
-def chat_completion_nonstream(messages, tools=None, max_retries=3):
-    api_key = os.getenv("API_KEY")
-    base_url = os.getenv("API_BASE_URL")
-    provider = os.getenv("API_PROVIDER", "")
-    model = os.getenv("MODEL")
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
     if "OpenRouter" in provider:
         headers["HTTP-Referer"] = "http://localhost"
         headers["X-Title"] = "AI-Agent"
@@ -263,10 +209,16 @@ def chat_completion_nonstream(messages, tools=None, max_retries=3):
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
+
     session = requests.Session()
-    retries = Retry(total=max_retries, backoff_factor=1, status_forcelist=[429,502,503,504], allowed_methods=["POST"], respect_retry_after_header=True)
-    session.mount("https://", HTTPAdapter(max_retries=retries))
-    session.mount("http://", HTTPAdapter(max_retries=retries))
+    retries = Retry(total=max_retries, backoff_factor=1,
+                    status_forcelist=[429, 502, 503, 504],
+                    allowed_methods=["POST"],
+                    respect_retry_after_header=True)
+    adapter = HTTPAdapter(max_retries=retries)
+    session.mount("https://", adapter)
+    session.mount("http://", adapter)
+
     url = normalize_api_url(base_url)
     for attempt in range(max_retries):
         try:
@@ -274,21 +226,22 @@ def chat_completion_nonstream(messages, tools=None, max_retries=3):
             if resp.status_code == 429:
                 retry_after = resp.headers.get("Retry-After")
                 wait = int(retry_after) if retry_after and retry_after.isdigit() else 10
-                console.print(f"[yellow]⏳ Rate limit 429, tunggu {wait}s[/]")
+                console.print(f"[yellow]⏳ Rate limit 429. Menunggu {wait} detik...[/]")
                 time.sleep(wait)
                 continue
             if resp.status_code != 200:
                 return {"error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
             return resp.json()
-        except (requests.exceptions.ConnectionError, requests.exceptions.ChunkedEncodingError) as e:
-            if attempt < max_retries-1:
-                console.print(f"[yellow]⚠ Koneksi gagal, coba {attempt+2}/{max_retries}[/]")
-                time.sleep(2**attempt)
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.ChunkedEncodingError) as e:
+            if attempt < max_retries - 1:
+                console.print(f"[yellow]⚠ Koneksi gagal, coba lagi ({attempt+2}/{max_retries})...[/]")
+                time.sleep(2 ** attempt)
             else:
                 return {"error": f"Koneksi gagal: {e}"}
     return {"error": "Gagal"}
 
-# ---------- TOOLS (tidak berubah) ----------
+# ----------------------- TOOLS -----------------------
 def check_github():
     try:
         subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
@@ -300,32 +253,35 @@ def ensure_git_identity():
     try:
         repo = git.Repo(CWD)
         reader = repo.config_reader()
-        if not reader.has_option("user","email") or not reader.has_option("user","name"):
-            res = subprocess.run(["gh","api","user"], capture_output=True, text=True)
+        if not reader.has_option("user", "email") or not reader.has_option("user", "name"):
+            res = subprocess.run(["gh", "api", "user"], capture_output=True, text=True)
             if res.returncode == 0:
                 data = json.loads(res.stdout)
-                email = data.get("email","user@example.com")
-                name = data.get("name", data.get("login","User"))
+                email = data.get("email", "user@example.com")
+                name = data.get("name", data.get("login", "User"))
             else:
-                email, name = "user@example.com", "AI Agent User"
+                email = "user@example.com"
+                name = "AI Agent User"
             writer = repo.config_writer()
-            writer.set_value("user","email", email)
-            writer.set_value("user","name", name)
+            writer.set_value("user", "email", email)
+            writer.set_value("user", "name", name)
             writer.release()
     except:
         pass
 
 def github_create_repo(name, private=False, description=""):
     ensure_git_identity()
-    cmd = ["gh","repo","create",name,"--push"] + (["--private"] if private else ["--public"])
+    cmd = ["gh", "repo", "create", name, "--push"]
+    if private: cmd.append("--private")
+    else: cmd.append("--public")
     if description: cmd.extend(["-d", description])
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, cwd=CWD)
         out = res.stdout.strip() or f"Repo {name} dibuat."
-        user = os.getenv("GITHUB_USER","")
+        user = os.getenv("GITHUB_USER", "")
         if user:
-            subprocess.run(["git","remote","remove","origin"], capture_output=True, cwd=CWD)
-            subprocess.run(["git","remote","add","origin", f"https://github.com/{user}/{name}.git"], capture_output=True, cwd=CWD)
+            subprocess.run(["git", "remote", "remove", "origin"], capture_output=True, cwd=CWD)
+            subprocess.run(["git", "remote", "add", "origin", f"https://github.com/{user}/{name}.git"], capture_output=True, cwd=CWD)
         return out
     except Exception as e:
         return f"ERROR: {e}"
@@ -337,14 +293,15 @@ def github_push(commit_msg="Update from AI Agent"):
         if repo.is_dirty(untracked_files=True):
             repo.git.add(A=True)
             repo.index.commit(commit_msg)
-            subprocess.run(["git","push","-u","origin","HEAD"], check=True, capture_output=True, cwd=CWD)
+            subprocess.run(["git", "push", "-u", "origin", "HEAD"], check=True, capture_output=True, cwd=CWD)
             return f"✅ Pushed: {commit_msg}"
         return "Tidak ada perubahan."
     except Exception as e:
         return f"ERROR: {e}"
 
 def github_clone(repo_url, target_dir=""):
-    cmd = ["gh","repo","clone",repo_url] + ([target_dir] if target_dir else [])
+    cmd = ["gh", "repo", "clone", repo_url]
+    if target_dir: cmd.append(target_dir)
     try:
         subprocess.run(cmd, check=True, capture_output=True, cwd=CWD)
         return f"Repo {repo_url} di-clone."
@@ -356,15 +313,18 @@ LOG_DIR.mkdir(exist_ok=True)
 
 def auto_run(command, project_name):
     global active_project
-    subprocess.run(["tmux","kill-session","-t",project_name], capture_output=True)
-    log = LOG_DIR / f"{project_name}.log"
-    subprocess.run(["tmux","new-session","-d","-s",project_name, f"bash -c '{command} 2>&1 | tee {log}'"])
+    subprocess.run(["tmux", "kill-session", "-t", project_name], capture_output=True)
+    log_file = LOG_DIR / f"{project_name}.log"
+    subprocess.run([
+        "tmux", "new-session", "-d", "-s", project_name,
+        f"bash -c '{command} 2>&1 | tee {log_file}'"
+    ])
     active_project = project_name
-    return f"Proyek {project_name} dijalankan. Log: {log}"
+    return f"Proyek {project_name} dijalankan. Log: {log_file}"
 
 def auto_stop(project_name):
     global active_project
-    subprocess.run(["tmux","kill-session","-t",project_name], capture_output=True)
+    subprocess.run(["tmux", "kill-session", "-t", project_name], capture_output=True)
     if active_project == project_name:
         active_project = None
     return f"Sesi {project_name} dihentikan."
@@ -372,36 +332,36 @@ def auto_stop(project_name):
 error_queue = queue.Queue()
 
 def monitor_logs(project_name):
-    log = LOG_DIR / f"{project_name}.log"
-    if not log.exists():
+    log_file = LOG_DIR / f"{project_name}.log"
+    if not log_file.exists():
         return
-    last = 0
+    last_size = 0
     while True:
         time.sleep(2)
-        if not log.exists():
+        if not log_file.exists():
             continue
         try:
-            cur = log.stat().st_size
-            if cur > last:
-                with open(log,'r') as f:
-                    f.seek(last)
-                    new = f.read()
-                last = cur
-                if any(k in new for k in ["Traceback","Error","error","FATAL"]):
-                    error_queue.put((project_name, new))
+            current_size = log_file.stat().st_size
+            if current_size > last_size:
+                with open(log_file, 'r') as f:
+                    f.seek(last_size)
+                    new_content = f.read()
+                last_size = current_size
+                if any(kw in new_content for kw in ["Traceback", "Error", "error", "FATAL"]):
+                    error_queue.put((project_name, new_content))
         except:
             pass
 
 def show_log_panel(project_name, lines=10):
     if not project_name:
         return
-    log = LOG_DIR / f"{project_name}.log"
-    if not log.exists():
+    log_file = LOG_DIR / f"{project_name}.log"
+    if not log_file.exists():
         return
     try:
-        with open(log) as f:
+        with open(log_file, 'r') as f:
             all_lines = f.readlines()
-        last_lines = all_lines[-lines:] if len(all_lines)>lines else all_lines
+        last_lines = all_lines[-lines:] if len(all_lines) > lines else all_lines
         content = "".join(last_lines).rstrip()
         if content:
             console.print(Panel(content, title=f"📋 Log [{project_name}]", border_style="blue"))
@@ -433,8 +393,8 @@ def list_directory(path="."):
     if not target.is_dir():
         return f"ERROR: {path} bukan direktori."
     items = os.listdir(target)
-    dirs = [d for d in items if (target/d).is_dir()]
-    files = [f for f in items if (target/f).is_file()]
+    dirs = [d for d in items if (target / d).is_dir()]
+    files = [f for f in items if (target / f).is_file()]
     res = ""
     if dirs: res += "[DIR] " + ", ".join(dirs) + "\n"
     if files: res += "[FILE] " + ", ".join(files)
@@ -451,23 +411,24 @@ def shell_command(cmd):
         return f"ERROR: {e}"
 
 def read_file(path):
-    full = (CWD/path).resolve()
+    full = (CWD / path).resolve()
     return full.read_text() if full.is_file() else f"ERROR: {path} tidak ditemukan."
 
 def write_file(path, content):
-    full = (CWD/path).resolve()
+    full = (CWD / path).resolve()
     full.parent.mkdir(parents=True, exist_ok=True)
     full.write_text(content)
     return f"✅ {path} ditulis ({len(content)} karakter)."
 
 def edit_file(path, old_str, new_str):
-    full = (CWD/path).resolve()
+    full = (CWD / path).resolve()
     if not full.is_file(): return f"ERROR: {path} tidak ditemukan."
     text = full.read_text()
     if old_str not in text: return f"ERROR: string tidak ditemukan."
     full.write_text(text.replace(old_str, new_str, 1))
     return f"✅ {path} diedit."
 
+# ----------------------- TOOL SPECS -----------------------
 tools_spec = [
     {"type":"function","function":{"name":"change_directory","description":"Pindah direktori.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
     {"type":"function","function":{"name":"list_directory","description":"Lihat isi direktori.","parameters":{"type":"object","properties":{"path":{"type":"string","default":"."}}}}},
@@ -480,7 +441,7 @@ tools_spec = [
     {"type":"function","function":{"name":"github_clone","description":"Clone repo.","parameters":{"type":"object","properties":{"repo_url":{"type":"string"},"target_dir":{"type":"string","default":""}},"required":["repo_url"]}}},
     {"type":"function","function":{"name":"auto_run","description":"Jalankan proyek di tmux.","parameters":{"type":"object","properties":{"command":{"type":"string"},"project_name":{"type":"string"}},"required":["command","project_name"]}}},
     {"type":"function","function":{"name":"auto_stop","description":"Hentikan proyek.","parameters":{"type":"object","properties":{"project_name":{"type":"string"}},"required":["project_name"]}}},
-    {"type":"function","function":{"name":"change_provider","description":"Ganti provider API/model.","parameters":{"type":"object","properties":{"provider":{"type":"string"},"api_key":{"type":"string"},"base_url":{"type":"string"},"model":{"type":"string"}}}}}
+    {"type":"function","function":{"name":"change_provider","description":"Ganti provider API/model.","parameters":{"type":"object","properties":{"provider":{"type":"string"},"api_key":{"type":"string"},"base_url":{"type":"string"},"model":{"type":"string"}}}}},
 ]
 
 tool_map = {
@@ -498,7 +459,7 @@ tool_map = {
     "change_provider": change_provider,
 }
 
-MAX_REPEATED = 3
+MAX_REPEATED_CALLS = 3
 
 def process_tool_calls(messages, tool_calls):
     global tool_call_counter
@@ -512,10 +473,10 @@ def process_tool_calls(messages, tool_calls):
             except:
                 pass
         key = f"{func_name}:{json.dumps(args, sort_keys=True)}"
-        tool_call_counter[key] = tool_call_counter.get(key,0)+1
-        if tool_call_counter[key] > MAX_REPEATED:
-            console.print(f"[red]⚠ {func_name} diulang >{MAX_REPEATED}x, diabaikan.[/]")
-            result = f"❌ Tindakan '{func_name}' diabaikan."
+        tool_call_counter[key] = tool_call_counter.get(key, 0) + 1
+        if tool_call_counter[key] > MAX_REPEATED_CALLS:
+            console.print(f"[red]⚠ {func_name} dipanggil >{MAX_REPEATED_CALLS}x dengan argumen sama. Diabaikan.[/]")
+            result = f"❌ Tindakan '{func_name}' diabaikan karena terlalu sering diulang."
         else:
             console.print(f"[dim]🔧 {func_name}[/]")
             func = tool_map.get(func_name)
@@ -523,67 +484,58 @@ def process_tool_calls(messages, tool_calls):
                 result = func(**args) if func else "Tool tidak dikenal."
             except Exception as e:
                 result = f"ERROR: {e}"
-        console.print(Panel(Syntax(str(result),"text",theme="monokai"), title=f"📤 {func_name}"))
-        new_msgs.append({"role":"tool","tool_call_id":tc.get("id","manual"),"name":func_name,"content":str(result)})
+        console.print(Panel(Syntax(str(result), "text", theme="monokai"), title=f"📤 {func_name}"))
+        new_msgs.append({
+            "role": "tool",
+            "tool_call_id": tc.get("id", "manual"),
+            "name": func_name,
+            "content": str(result)
+        })
         if func_name == "auto_run":
-            proj = args.get("project_name")
-            if proj:
-                threading.Thread(target=monitor_logs, args=(proj,), daemon=True).start()
+            project = args.get("project_name")
+            if project:
+                threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
     return new_msgs
 
-def show_streamed_response(user_input, system_prompt, convo):
-    messages = convo + [{"role":"user","content": user_input}]
-    console.print("[bold cyan]🧠 Thinking...[/]", end="\r")
-    collected = ""
-    final_msg = None
-    first = True
-    for ev, dat in stream_chat_completion(messages, tools_spec):
-        if ev == 'token':
-            if first:
-                console.print(" "*20, end="\r")
-                first = False
-            console.print(dat, end="", highlight=False)
-            collected += dat
-        elif ev == 'done':
-            final_msg = dat
-            break
-        elif ev == 'error':
-            console.print(f"\n[red]{dat}[/]")
-            return None
-    console.print()
-    return final_msg
-
+# ----------------------- MAIN LOOP -----------------------
 def run_agent():
     global tool_call_counter, task_list
     load_config()
-    model = os.getenv("MODEL","google/gemini-2.0-flash-001")
+    model = os.getenv("MODEL", "google/gemini-2.0-flash-001")
     SYSTEM_PROMPT = f"""Kamu AI Developer Agent di Termux. Dir: {CWD}
 Tools: baca/tulis/edit file, shell cmd, GitHub, auto_run/stop, change_provider.
 Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah."""
-    messages = [{"role":"system","content":SYSTEM_PROMPT}]
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
     os.system('clear')
     console.print("[dim]Memeriksa update...[/]")
     check_and_update()
     time.sleep(1)
     os.system('clear')
+
     console.print(Panel.fit(
-        f"[bold cyan]● AI Agent Ultimate — Direct & Streaming[/]\n"
-        f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}",
+        f"[bold cyan]● AI Agent Ultimate[/]\n"
+        f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}\n"
+        f"[dim]Fitur: Auto Update | Auto Run | Auto Fix | Log Panel | Anti‑Pengulangan | Ganti Provider[/]",
         border_style="bright_blue"))
+
     if task_list:
-        console.print(f"[yellow]📋 {len(task_list)} tugas dari auto-fix.[/]")
+        console.print(f"[yellow]📋 {len(task_list)} tugas dari auto-fix tertunda.[/]")
 
     while True:
         tool_call_counter.clear()
+
+        # Proses auto-fix dari monitor
         try:
-            proj, err = error_queue.get_nowait()
-            console.print(Panel(f"[bold red]🐛 Error di {proj}![/]\n{err[:500]}", title="Auto Monitor"))
-            task_list.append(f"Perbaiki error di proyek {proj}: {err[:200]}")
+            project, err_text = error_queue.get_nowait()
+            console.print(Panel(f"[bold red]🐛 Error terdeteksi di {project}![/]\n{err_text[:500]}", title="Auto Monitor"))
+            task_list.append(f"Perbaiki error di proyek {project}: {err_text[:200]}")
             save_memory()
         except queue.Empty:
             pass
 
+        # Kerjakan tugas auto-fix jika ada
         if task_list:
             user_input = task_list.pop(0)
             save_memory()
@@ -594,55 +546,17 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
             except (KeyboardInterrupt, EOFError):
                 console.print("\n[red]Keluar.[/]")
                 break
-            if user_input.lower() in ["exit","quit","keluar"]:
+            if user_input.lower() in ["exit", "quit", "keluar"]:
                 break
             if not user_input.strip():
                 continue
 
-        final_msg = show_streamed_response(user_input, SYSTEM_PROMPT, messages)
-        if final_msg is None:
-            continue
-        messages.append({"role":"user","content": user_input})
+        messages.append({"role": "user", "content": user_input})
 
-        # --- Deteksi tool call (asli atau JSON mentah) ---
-        if "tool_calls" in final_msg:
-            messages.append(final_msg)
-            tool_msgs = process_tool_calls(messages, final_msg["tool_calls"])
-            messages.extend(tool_msgs)
-        else:
-            content = final_msg.get("content","")
-            # Cek apakah konten adalah JSON tool call mentah
-            if content.strip().startswith('{"name"') or content.strip().startswith('{"function"'):
-                try:
-                    possible_tool = json.loads(content)
-                    # Bisa berupa {"name":..., "parameters":...} atau {"function":...}
-                    if "function" in possible_tool:
-                        func_block = possible_tool["function"]
-                    else:
-                        func_block = possible_tool
-                    if "name" in func_block and "parameters" in func_block:
-                        fake_tc = [{"id":"manual","type":"function","function": func_block}]
-                        tool_msgs = process_tool_calls(messages, fake_tc)
-                        messages.extend(tool_msgs)
-                        # Lanjutkan dengan non-stream untuk hasil
-                except:
-                    # Bukan tool call, jadi tampilkan sebagai teks biasa
-                    if content:
-                        console.print(Panel(Markdown(content), title="🤖 AI", border_style="green"))
-                    messages.append(final_msg)
-                    show_log_panel(active_project)
-                    continue
-            else:
-                # Teks biasa
-                if content:
-                    console.print(Panel(Markdown(content), title="🤖 AI", border_style="green"))
-                messages.append(final_msg)
-                show_log_panel(active_project)
-                continue
-
-        # Jika tadi ada tool call (asli atau manual), lanjutkan loop non-stream untuk respons setelah tool
-        for _ in range(5):
-            resp = chat_completion_nonstream(messages, tools_spec)
+        # Loop respon (max 10 tool-call reply)
+        step = 0
+        while step < 10:
+            resp = chat_completion(messages, tools_spec)
             if "error" in resp:
                 console.print(f"[red]{resp['error']}[/]")
                 break
@@ -651,6 +565,7 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
             if "tool_calls" in msg:
                 tool_msgs = process_tool_calls(messages, msg["tool_calls"])
                 messages.extend(tool_msgs)
+                step += 1
             else:
                 if msg.get("content"):
                     console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
