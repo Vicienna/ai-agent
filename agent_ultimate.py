@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-AI Agent Ultimate – Direct Mode (no animation) — Anti-Pengulangan, Change Provider, Auto Everything
+AI Agent Ultimate – Animasi Thinking + Model Tools‑Capable Only
 """
 
-import os, sys, subprocess, json, time, hashlib, queue, threading
+import os, sys, subprocess, json, time, hashlib, queue, threading, re
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -48,7 +48,7 @@ active_project = None
 tool_call_counter = {}
 
 memory_file = Path(__file__).parent / "agent_memory.json"
-task_list = []          # untuk auto-fix
+task_list = []
 completed_tasks = []
 
 def load_memory():
@@ -87,7 +87,7 @@ def check_and_update():
     except:
         return True
 
-# ----------------------- SETUP WIZARD -----------------------
+# ----------------------- SETUP WIZARD (model direkomendasikan) -----------------------
 def run_setup():
     console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard[/]", border_style="bright_blue"))
     providers = {
@@ -106,31 +106,46 @@ def run_setup():
     set_key(ENV_FILE, "API_KEY", api_key)
     set_key(ENV_FILE, "API_PROVIDER", provider["name"])
     if choice == "3":
+        console.print("Contoh base URL: https://api.groq.com/v1 (tanpa /chat/completions)")
         base_url = Prompt.ask("Masukkan base URL").strip().rstrip('/')
         set_key(ENV_FILE, "API_BASE_URL", base_url)
     else:
         set_key(ENV_FILE, "API_BASE_URL", provider["base"])
+
+    # --- Model (hanya yang tools-capable untuk OpenRouter) ---
     if choice == "1":
         models = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "Custom"]
+        console.print("[yellow]ℹ GPT‑3.5 mungkin kurang optimal untuk alat, disarankan GPT‑4o.[/]")
     elif choice == "2":
         models = [
-            "meta-llama/llama-3.1-70b-instruct",
-            "meta-llama/llama-3.1-8b-instruct",
-            "google/gemini-2.0-flash-001",
-            "anthropic/claude-3.5-sonnet",
-            "openai/gpt-4o",
-            "poolside/laguna-m.1:free",
-            "Custom"
+            "1. google/gemini-2.0-flash-001 ✅ (gratis, direkomendasikan)",
+            "2. openai/gpt-4o (butuh kredit)",
+            "3. anthropic/claude-3.5-sonnet (butuh kredit)",
+            "4. Custom (masukkan ID sendiri)"
         ]
+        console.print("[bold green]ℹ Hanya model di atas yang sudah teruji mendukung semua fitur AI Agent.[/]")
     else:
         models = ["Custom"]
-    for i, m in enumerate(models, 1):
-        console.print(f"  {i}. {m}")
-    model_choice = Prompt.ask("Pilih model", choices=[str(i) for i in range(1, len(models)+1)], default="1")
-    if models[int(model_choice)-1] == "Custom":
-        model = Prompt.ask("ID model")
+
+    for m in models:
+        console.print(f"  {m}")
+    if choice == "2":
+        # Pilihan numerik 1..4
+        model_choice = Prompt.ask("Pilih nomor model", choices=["1","2","3","4"], default="1")
+        if model_choice == "1":
+            model = "google/gemini-2.0-flash-001"
+        elif model_choice == "2":
+            model = "openai/gpt-4o"
+        elif model_choice == "3":
+            model = "anthropic/claude-3.5-sonnet"
+        else:
+            model = Prompt.ask("Masukkan ID model")
     else:
-        model = models[int(model_choice)-1]
+        model_choice = Prompt.ask("Pilih model", choices=[str(i) for i in range(1, len(models)+1)], default="1")
+        if models[int(model_choice)-1] == "Custom":
+            model = Prompt.ask("ID model")
+        else:
+            model = models[int(model_choice)-1]
     set_key(ENV_FILE, "MODEL", model)
 
     # GitHub Token opsional
@@ -188,7 +203,7 @@ def load_config():
             pass
     load_memory()
 
-# ----------------------- API CLIENT (non-stream) -----------------------
+# ----------------------- API CLIENT -----------------------
 def normalize_api_url(base):
     base = base.rstrip('/')
     return base if base.endswith('/chat/completions') else f"{base}/chat/completions"
@@ -241,7 +256,7 @@ def chat_completion(messages, tools=None, max_retries=3):
                 return {"error": f"Koneksi gagal: {e}"}
     return {"error": "Gagal"}
 
-# ----------------------- TOOLS -----------------------
+# ----------------------- TOOLS (sama seperti sebelumnya) -----------------------
 def check_github():
     try:
         subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
@@ -428,7 +443,6 @@ def edit_file(path, old_str, new_str):
     full.write_text(text.replace(old_str, new_str, 1))
     return f"✅ {path} diedit."
 
-# ----------------------- TOOL SPECS -----------------------
 tools_spec = [
     {"type":"function","function":{"name":"change_directory","description":"Pindah direktori.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
     {"type":"function","function":{"name":"list_directory","description":"Lihat isi direktori.","parameters":{"type":"object","properties":{"path":{"type":"string","default":"."}}}}},
@@ -497,7 +511,7 @@ def process_tool_calls(messages, tool_calls):
                 threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
     return new_msgs
 
-# ----------------------- MAIN LOOP -----------------------
+# ----------------------- MAIN LOOP (dengan animasi thinking) -----------------------
 def run_agent():
     global tool_call_counter, task_list
     load_config()
@@ -517,7 +531,7 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
     console.print(Panel.fit(
         f"[bold cyan]● AI Agent Ultimate[/]\n"
         f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}\n"
-        f"[dim]Fitur: Auto Update | Auto Run | Auto Fix | Log Panel | Anti‑Pengulangan | Ganti Provider[/]",
+        f"[dim]Fitur: Auto Update | Auto Run | Auto Fix | Log Panel | Anti‑Pengulangan | Ganti Provider | Animasi Thinking[/]",
         border_style="bright_blue"))
 
     if task_list:
@@ -535,7 +549,6 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
         except queue.Empty:
             pass
 
-        # Kerjakan tugas auto-fix jika ada
         if task_list:
             user_input = task_list.pop(0)
             save_memory()
@@ -553,10 +566,11 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
 
         messages.append({"role": "user", "content": user_input})
 
-        # Loop respon (max 10 tool-call reply)
         step = 0
         while step < 10:
-            resp = chat_completion(messages, tools_spec)
+            # Animasi thinking
+            with console.status("[bold cyan]🧠 Thinking...[/]", spinner="dots"):
+                resp = chat_completion(messages, tools_spec)
             if "error" in resp:
                 console.print(f"[red]{resp['error']}[/]")
                 break
