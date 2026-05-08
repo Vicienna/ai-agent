@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI Agent Ultimate – Fixed: Cancel text, robust tool errors
+Tagent – Your AI Agent by Vicienna
 """
 
-import os, sys, subprocess, json, time, hashlib, queue, threading, signal
+import os, sys, subprocess, json, time, hashlib, queue, threading
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -71,7 +71,7 @@ def save_memory():
     }, indent=2))
 
 # ----------------------- AUTO UPDATE -----------------------
-GITHUB_RAW_URL = "https://raw.githubusercontent.com/Vicienna/ai-agent/main/agent_ultimate.py"
+GITHUB_RAW_URL = "https://raw.githubusercontent.com/Vicienna/ai-agent/main/agent.py"
 SCRIPT_PATH = Path(__file__).resolve()
 
 def check_and_update():
@@ -90,9 +90,26 @@ def check_and_update():
     except:
         return True
 
-# ----------------------- SETUP WIZARD (singkat) -----------------------
+# ----------------------- SETUP WIZARD + INSTALL TRIGGER -----------------------
+def install_trigger():
+    """Buat perintah 'tagent' global di Termux."""
+    try:
+        target_dir = Path("/data/data/com.termux/files/usr/bin")
+        if not target_dir.exists():
+            target_dir = Path.home() / "bin"
+            target_dir.mkdir(exist_ok=True)
+        trigger_path = target_dir / "tagent"
+        script_path = SCRIPT_PATH.resolve()
+        # Buat wrapper bash
+        with open(trigger_path, 'w') as f:
+            f.write(f"#!/bin/bash\ncd \"{script_path.parent}\" && python \"{script_path}\" \"$@\"\n")
+        os.chmod(trigger_path, 0o755)
+        console.print(f"[green]✅ Perintah 'tagent' siap! Tinggal ketik `tagent` di mana saja.[/]")
+    except Exception as e:
+        console.print(f"[yellow]⚠ Gagal membuat trigger: {e}. Gunakan python {SCRIPT_PATH.name} manual.[/]")
+
 def run_setup():
-    console.print(Panel.fit("[bold cyan]🛠️ Setup Wizard[/]", border_style="bright_blue"))
+    console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard – Tagent[/]", border_style="bright_blue"))
     providers = {
         "1": {"name": "OpenAI", "base": "https://api.openai.com/v1", "key_link": "https://platform.openai.com/api-keys"},
         "2": {"name": "OpenRouter", "base": "https://openrouter.ai/api/v1", "key_link": "https://openrouter.ai/keys"},
@@ -163,6 +180,11 @@ def run_setup():
     d = Prompt.ask("Direktori kerja (kosongkan = sekarang)")
     if d.strip():
         set_key(ENV_FILE, "WORK_DIR", d)
+
+    # Buat trigger tagent
+    if Prompt.ask("Buat perintah global 'tagent'?", choices=["y","n"], default="y") == "y":
+        install_trigger()
+
     console.print("[green]✅ Setup selesai![/]")
 
 def load_config():
@@ -201,7 +223,7 @@ def stream_chat_completion(messages, tools=None):
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if "OpenRouter" in provider:
         headers["HTTP-Referer"] = "http://localhost"
-        headers["X-Title"] = "AI-Agent"
+        headers["X-Title"] = "Tagent"
     payload = {"model": model, "messages": messages, "temperature": 0.2, "stream": True}
     if tools:
         payload["tools"] = tools
@@ -260,7 +282,7 @@ def chat_completion_nonstream(messages, tools=None, max_retries=3):
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if "OpenRouter" in provider:
         headers["HTTP-Referer"] = "http://localhost"
-        headers["X-Title"] = "AI-Agent"
+        headers["X-Title"] = "Tagent"
     payload = {"model": model, "messages": messages, "temperature": 0.2}
     if tools:
         payload["tools"] = tools
@@ -289,7 +311,7 @@ def chat_completion_nonstream(messages, tools=None, max_retries=3):
                 return {"error": f"Koneksi gagal: {e}"}
     return {"error": "Gagal"}
 
-# ---------- TOOLS ----------
+# ---------- TOOLS (sama seperti sebelumnya) ----------
 def check_github():
     try:
         subprocess.run(["gh","auth","status"], check=True, capture_output=True)
@@ -332,7 +354,7 @@ def github_create_repo(name, private=False, description=""):
     except Exception as e:
         return f"ERROR: {e}"
 
-def github_push(commit_msg="Update from AI Agent"):
+def github_push(commit_msg="Update from Tagent"):
     try:
         ensure_git_identity()
         repo = git.Repo(CWD)
@@ -433,18 +455,13 @@ def list_directory(path="."):
 
 def shell_command(cmd):
     try:
-        # If command is not found, don't crash, return error message
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60, cwd=CWD, executable="/data/data/com.termux/files/usr/bin/bash" if "ANDROID_ROOT" in os.environ else None)
         out = (res.stdout+res.stderr).strip()
-        if not out:
-            return "(ok)"
-        if "command not found" in out or "not found" in out:
-            return f"ERROR: Perintah tidak ditemukan. Coba gunakan busybox: busybox {cmd}"
+        if not out: return "(ok)"
+        if "command not found" in out: return f"ERROR: Perintah tidak ditemukan. Coba busybox {cmd}"
         return out
-    except subprocess.TimeoutExpired:
-        return "ERROR: Timeout 60s"
-    except Exception as e:
-        return f"ERROR: {e}"
+    except subprocess.TimeoutExpired: return "ERROR: Timeout"
+    except Exception as e: return f"ERROR: {e}"
 
 def read_file(path):
     f = (CWD/path).resolve()
@@ -472,7 +489,7 @@ tools_spec = [
     {"type":"function","function":{"name":"write_file","description":"Tulis file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}},
     {"type":"function","function":{"name":"edit_file","description":"Edit file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_str":{"type":"string"},"new_str":{"type":"string"}},"required":["path","old_str","new_str"]}}},
     {"type":"function","function":{"name":"github_create_repo","description":"Buat repo GitHub.","parameters":{"type":"object","properties":{"name":{"type":"string"},"private":{"type":"boolean","default":False},"description":{"type":"string","default":""}},"required":["name"]}}},
-    {"type":"function","function":{"name":"github_push","description":"Push ke GitHub.","parameters":{"type":"object","properties":{"commit_msg":{"type":"string","default":"Update from AI Agent"}}}}},
+    {"type":"function","function":{"name":"github_push","description":"Push ke GitHub.","parameters":{"type":"object","properties":{"commit_msg":{"type":"string","default":"Update from Tagent"}}}}},
     {"type":"function","function":{"name":"github_clone","description":"Clone repo.","parameters":{"type":"object","properties":{"repo_url":{"type":"string"},"target_dir":{"type":"string","default":""}},"required":["repo_url"]}}},
     {"type":"function","function":{"name":"auto_run","description":"Jalankan proyek di tmux.","parameters":{"type":"object","properties":{"command":{"type":"string"},"project_name":{"type":"string"}},"required":["command","project_name"]}}},
     {"type":"function","function":{"name":"auto_stop","description":"Hentikan proyek.","parameters":{"type":"object","properties":{"project_name":{"type":"string"}},"required":["project_name"]}}},
@@ -525,7 +542,7 @@ def process_tool_calls(messages, tool_calls):
                 threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
     return new_msgs
 
-# ---------- DISPLAY STREAMING + TIMER + CANCEL (FIXED TEXT) ----------
+# ---------- DISPLAY STREAMING + TIMER + CANCEL ----------
 def display_stream(messages):
     start_time = time.time()
     thinking_text = ""
@@ -548,7 +565,6 @@ def display_stream(messages):
         else:
             panel_text.append("🧠 Thinking... ", style="bold yellow")
             panel_text.append(timer_str, style="bold magenta")
-        # Cancel hint dengan style, bukan markup
         panel_text.append("\n")
         panel_text.append("(Ctrl+C untuk batal)", style="red")
         return Panel(panel_text, border_style="blue", title="Streaming")
@@ -586,12 +602,12 @@ def display_stream(messages):
 
     return final_msg, content_text
 
-# ---------- MAIN (dengan perlindungan crash) ----------
+# ---------- MAIN ----------
 def run_agent():
     global tool_call_counter, task_list
     load_config()
     model = os.getenv("MODEL","google/gemini-2.0-flash-001")
-    SYSTEM_PROMPT = f"""Kamu AI Developer Agent di Termux. Dir: {CWD}
+    SYSTEM_PROMPT = f"""Kamu Tagent, AI Developer Agent di Termux. Dir: {CWD}
 Tools: baca/tulis/edit file, shell cmd, GitHub, auto_run/stop, change_provider.
 Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
 
@@ -603,11 +619,23 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
     time.sleep(1)
     os.system('clear')
 
-    console.print(Panel.fit(
-        f"[bold cyan]● AI Agent Ultimate[/]\n"
-        f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}\n"
-        f"[dim]Fitur: Auto Run/Fix | Log Panel | Anti‑Pengulangan | Ganti Provider | Live Thinking Timer | Cancel (Ctrl+C)[/]",
-        border_style="bright_blue"))
+    # Banner keren
+    banner = Text()
+    banner.append("╔══════════════════════════════════════════════╗\n", style="bright_cyan")
+    banner.append("║          ", style="bright_cyan")
+    banner.append("🤖  T A G E N T  🤖", style="bold white on blue")
+    banner.append("           ║\n", style="bright_cyan")
+    banner.append("║                                              ║\n", style="bright_cyan")
+    banner.append("║  Creator : Vicienna                           ║\n", style="cyan")
+    banner.append("║  Source  : github.com/Vicienna/ai-agent      ║\n", style="cyan")
+    banner.append("║  IG: ceena.dev  GitHub: Vicienna              ║\n", style="cyan")
+    banner.append("║  Discord: hallo.dev                           ║\n", style="cyan")
+    banner.append("║                                              ║\n", style="bright_cyan")
+    banner.append("╚══════════════════════════════════════════════╝", style="bright_cyan")
+    console.print(banner)
+
+    info = f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}"
+    console.print(Panel(info, border_style="blue"))
 
     if task_list:
         console.print(f"[yellow]📋 {len(task_list)} tugas auto‑fix.[/]")
@@ -630,32 +658,28 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
             try:
                 user_input = Prompt.ask("\n[bold green]▸[/]")
             except (KeyboardInterrupt, EOFError):
-                console.print("\n[red]Keluar.[/]")
+                console.print("\n[red]Bye![/]")
                 break
             if user_input.lower() in ["exit","quit","keluar"]:
                 break
             if not user_input.strip():
                 continue
 
-        # Simpan user message dulu
         messages.append({"role":"user","content":user_input})
         msg_index = len(messages) - 1
 
-        # Streaming dengan try-except agar agent tidak crash total
         try:
             final_msg, content = display_stream(messages)
         except Exception as e:
-            console.print(f"[red]Error during streaming: {e}[/]")
+            console.print(f"[red]Stream error: {e}[/]")
             del messages[msg_index]
             continue
 
         if final_msg is None:
-            # Batal atau error, hapus user message terakhir
             if len(messages) > msg_index:
                 del messages[msg_index]
             continue
 
-        # Jika ada tool calls, jalankan tool dan lanjutkan
         if "tool_calls" in final_msg:
             messages.append(final_msg)
             try:
@@ -673,20 +697,20 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
                         messages.extend(tool_msgs)
                     else:
                         if msg.get("content"):
-                            console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
+                            console.print(Panel(Markdown(msg["content"]), title="🤖 Tagent", border_style="green"))
                         break
             except KeyboardInterrupt:
                 console.print("\n[red]⚠ Dibatalkan saat eksekusi tools.[/]")
                 del messages[msg_index:]
                 continue
             except Exception as e:
-                console.print(f"[red]Error tool: {e}[/]")
+                console.print(f"[red]Tool error: {e}[/]")
                 del messages[msg_index:]
                 continue
         else:
             messages.append(final_msg)
             if content:
-                console.print(Panel(Markdown(content), title="🤖 AI", border_style="green"))
+                console.print(Panel(Markdown(content), title="🤖 Tagent", border_style="green"))
 
         show_log_panel(active_project)
 
@@ -694,4 +718,4 @@ if __name__ == "__main__":
     try:
         run_agent()
     except KeyboardInterrupt:
-        console.print("\n[red]Keluar.[/]")
+        console.print("\n[red]Tagent dimatikan.[/]")
