@@ -108,16 +108,20 @@ Tagent mendukung banyak provider. Pilih saat setup atau ganti langsung dari chat
 ```
 $ tagent
 
-╔══════════════════════════════════════════════╗
-║          🤖  T A G E N T  🤖           ║
-║                                              ║
-║  Creator : Vicienna                           ║
-║  Source  : github.com/Vicienna/ai-agent      ║
-║  IG: ceena.dev  GitHub: Vicienna              ║
-║  Discord: hallo.dev                           ║
-╚══════════════════════════════════════════════╝
-
-Provider: OpenRouter | Model: google/gemini-2.0-flash-001 | GitHub: ✅
+╭─ Welcome ──────────────────────────────────────────╮
+│                                                    │
+│       🤖  T A G E N T  🤖                          │
+│                                                    │
+│       Creator : Vicienna                           │
+│       Source  : github.com/Vicienna/ai-agent       │
+│       IG: ceena.dev  GitHub: Vicienna              │
+│       Discord: hallo.dev                           │
+│                                                    │
+╰────────────────────────────────────────────────────╯
+╭────────────────────────────────────────────────────╮
+│ Provider: Ollama (Local) | Model:                  │
+│ nemotron-3-super:cloud | GitHub: ✅                │
+╰────────────────────────────────────────────────────╯
 
 ▸ Buat web server Python sederhana
 
