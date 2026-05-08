@@ -108,7 +108,7 @@ Tagent mendukung banyak provider. Pilih saat setup atau ganti langsung dari chat
 ```
 $ tagent
 
-╭─ Welcome ─────────────────────────────────╮
+╭─ Welcome ──────────────────────────────────╮
 │                                                    │
 │       🤖  T A G E N T  🤖                          │
 │                                                    │
