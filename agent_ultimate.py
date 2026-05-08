@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-AI Agent Ultimate – Auto Update + Auto Run + Auto Fix + Log Panel + Git Identity Fix
-Multi-Provider, GitHub via gh CLI, Tmux session manager, log proyek tampil di terminal.
+AI Agent Ultimate – Auto Update + Auto Run + Auto Fix + Log Panel + Change Provider
+Multi-Provider, GitHub via gh CLI, Tmux session manager, anti-pengulangan.
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -46,6 +46,7 @@ console = Console()
 ENV_FILE = Path(__file__).parent / ".env"
 CWD = Path.cwd()
 active_project = None   # menyimpan nama proyek yang sedang berjalan
+tool_call_counter = {}  # untuk deteksi pengulangan tool
 
 # ----------------------- AUTO UPDATE -----------------------
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Vicienna/ai-agent/main/agent_ultimate.py"
@@ -168,7 +169,9 @@ def chat_completion(messages, tools=None, max_retries=3):
 
     session = requests.Session()
     retries = Retry(total=max_retries, backoff_factor=1,
-                    status_forcelist=[502, 503, 504], allowed_methods=["POST"])
+                    status_forcelist=[429, 502, 503, 504],
+                    allowed_methods=["POST"],
+                    respect_retry_after_header=True)
     adapter = HTTPAdapter(max_retries=retries)
     session.mount("https://", adapter)
     session.mount("http://", adapter)
@@ -177,8 +180,14 @@ def chat_completion(messages, tools=None, max_retries=3):
     for attempt in range(max_retries):
         try:
             resp = session.post(url, headers=headers, json=payload, timeout=120)
+            if resp.status_code == 429:
+                retry_after = resp.headers.get("Retry-After")
+                wait = int(retry_after) if retry_after and retry_after.isdigit() else 10
+                console.print(f"[yellow]⏳ Rate limit 429. Menunggu {wait} detik...[/]")
+                time.sleep(wait)
+                continue  # coba lagi
             if resp.status_code != 200:
-                return {"error": f"HTTP {resp.status_code}: {resp.text}"}
+                return {"error": f"HTTP {resp.status_code}: {resp.text[:500]}"}
             return resp.json()
         except (requests.exceptions.ConnectionError,
                 requests.exceptions.ChunkedEncodingError) as e:
@@ -189,7 +198,7 @@ def chat_completion(messages, tools=None, max_retries=3):
                 return {"error": f"Koneksi gagal setelah {max_retries}x: {e}"}
     return {"error": "Gagal"}
 
-# ----------------------- GITHUB TOOLS (gh CLI) -----------------------
+# ----------------------- TOOLS: GITHUB -----------------------
 def check_github():
     try:
         subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
@@ -242,7 +251,7 @@ def github_push(commit_msg="Update from AI Agent"):
         if repo.is_dirty(untracked_files=True):
             repo.git.add(A=True)
             repo.index.commit(commit_msg)
-            subprocess.run(["git", "push", "-u", "origin", "HEAD", "--force"], check=True, capture_output=True, cwd=CWD)
+            subprocess.run(["git", "push", "-u", "origin", "HEAD"], check=True, capture_output=True, cwd=CWD)
             return f"✅ Pushed: {commit_msg}"
         return "Tidak ada perubahan."
     except Exception as e:
@@ -298,7 +307,7 @@ def monitor_logs(project_name):
                     f.seek(last_size)
                     new_content = f.read()
                 last_size = current_size
-                if "Traceback" in new_content or "Error" in new_content or "error" in new_content:
+                if any(kw in new_content for kw in ["Traceback", "Error", "error", "FATAL"]):
                     error_queue.put((project_name, new_content))
         except:
             pass
@@ -320,7 +329,7 @@ def show_log_panel(project_name, lines=10):
     except Exception as e:
         console.print(f"[yellow]Gagal membaca log: {e}[/]")
 
-# ----------------------- TOOLS -----------------------
+# ----------------------- TOOLS: BASE -----------------------
 def change_directory(path):
     global CWD
     try:
@@ -340,12 +349,20 @@ def list_directory(path="."):
     items = os.listdir(target)
     dirs = [d for d in items if (target / d).is_dir()]
     files = [f for f in items if (target / f).is_file()]
-    return (("[DIR] " + ", ".join(dirs) + "\n") if dirs else "") + ("[FILE] " + ", ".join(files) if files else "Kosong")
+    result = ""
+    if dirs:
+        result += "[DIR] " + ", ".join(dirs) + "\n"
+    if files:
+        result += "[FILE] " + ", ".join(files)
+    return result.strip() or "Kosong"
 
 def shell_command(cmd):
     try:
         res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60, cwd=CWD)
-        return (res.stdout + res.stderr).strip() or "(ok)"
+        output = (res.stdout + res.stderr).strip()
+        return output if output else "(ok)"
+    except subprocess.TimeoutExpired:
+        return "ERROR: Perintah timeout (60 detik)."
     except Exception as e:
         return f"ERROR: {e}"
 
@@ -365,22 +382,47 @@ def edit_file(path, old_str, new_str):
         return f"ERROR: {path} tidak ditemukan."
     text = full.read_text()
     if old_str not in text:
-        return f"ERROR: string tidak ditemukan."
-    full.write_text(text.replace(old_str, new_str, 1))
-    return f"✅ {path} diedit."
+        return f"ERROR: string tidak ditemukan dalam file."
+    new_text = text.replace(old_str, new_str, 1)
+    full.write_text(new_text)
+    return f"✅ {path} diedit (1 perubahan)."
 
+# ----------------------- TOOL: CHANGE PROVIDER -----------------------
+def change_provider(provider=None, api_key=None, base_url=None, model=None):
+    """Ganti provider/API/key/model langsung dari chat."""
+    if provider:
+        set_key(ENV_FILE, "API_PROVIDER", provider)
+    if api_key:
+        set_key(ENV_FILE, "API_KEY", api_key)
+    if base_url:
+        set_key(ENV_FILE, "API_BASE_URL", base_url)
+    if model:
+        set_key(ENV_FILE, "MODEL", model)
+    # Reload environment
+    load_dotenv(ENV_FILE, override=True)
+    new_provider = os.getenv("API_PROVIDER", "Tidak diketahui")
+    new_model = os.getenv("MODEL", "Tidak diketahui")
+    return f"✅ Provider diubah: {new_provider} | Model: {new_model}"
+
+# ----------------------- TOOL SPECS -----------------------
 tools_spec = [
     {"type": "function", "function": {"name": "change_directory", "description": "Pindah direktori.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
-    {"type": "function", "function": {"name": "list_directory", "description": "Lihat isi direktori.", "parameters": {"type": "object", "properties": {"path": {"type": "string", "default": "."}}}}},
-    {"type": "function", "function": {"name": "shell_command", "description": "Jalankan perintah shell.", "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]}}},
-    {"type": "function", "function": {"name": "read_file", "description": "Baca file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
-    {"type": "function", "function": {"name": "write_file", "description": "Tulis file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
-    {"type": "function", "function": {"name": "edit_file", "description": "Edit file.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_str": {"type": "string"}, "new_str": {"type": "string"}}, "required": ["path", "old_str", "new_str"]}}},
+    {"type": "function", "function": {"name": "list_directory", "description": "Lihat isi direktori (jangan ulangi).", "parameters": {"type": "object", "properties": {"path": {"type": "string", "default": "."}}}}},
+    {"type": "function", "function": {"name": "shell_command", "description": "Jalankan perintah shell. Hindari pengulangan.", "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]}}},
+    {"type": "function", "function": {"name": "read_file", "description": "Baca file (hanya jika diperlukan).", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}}},
+    {"type": "function", "function": {"name": "write_file", "description": "Tulis file baru atau timpa.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "edit_file", "description": "Edit file dengan find/replace.", "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "old_str": {"type": "string"}, "new_str": {"type": "string"}}, "required": ["path", "old_str", "new_str"]}}},
     {"type": "function", "function": {"name": "github_create_repo", "description": "Buat repo GitHub.", "parameters": {"type": "object", "properties": {"name": {"type": "string"}, "private": {"type": "boolean", "default": False}, "description": {"type": "string", "default": ""}}, "required": ["name"]}}},
-    {"type": "function", "function": {"name": "github_push", "description": "Push perubahan.", "parameters": {"type": "object", "properties": {"commit_msg": {"type": "string", "default": "Update from AI Agent"}}}}},
-    {"type": "function", "function": {"name": "github_clone", "description": "Clone repo.", "parameters": {"type": "object", "properties": {"repo_url": {"type": "string"}, "target_dir": {"type": "string", "default": ""}}, "required": ["repo_url"]}}},
-    {"type": "function", "function": {"name": "auto_run", "description": "Jalankan proyek di tmux session.", "parameters": {"type": "object", "properties": {"command": {"type": "string"}, "project_name": {"type": "string"}}, "required": ["command", "project_name"]}}},
+    {"type": "function", "function": {"name": "github_push", "description": "Push perubahan ke GitHub.", "parameters": {"type": "object", "properties": {"commit_msg": {"type": "string", "default": "Update from AI Agent"}}}}},
+    {"type": "function", "function": {"name": "github_clone", "description": "Clone repo dari GitHub.", "parameters": {"type": "object", "properties": {"repo_url": {"type": "string"}, "target_dir": {"type": "string", "default": ""}}, "required": ["repo_url"]}}},
+    {"type": "function", "function": {"name": "auto_run", "description": "Jalankan proyek di tmux session (non-bloking).", "parameters": {"type": "object", "properties": {"command": {"type": "string"}, "project_name": {"type": "string"}}, "required": ["command", "project_name"]}}},
     {"type": "function", "function": {"name": "auto_stop", "description": "Hentikan proyek yang berjalan.", "parameters": {"type": "object", "properties": {"project_name": {"type": "string"}}, "required": ["project_name"]}}},
+    {"type": "function", "function": {"name": "change_provider", "description": "Ganti provider AI (OpenAI, OpenRouter, Custom), API key, base URL, atau model.", "parameters": {"type": "object", "properties": {
+        "provider": {"type": "string", "description": "Nama provider (OpenAI, OpenRouter, Custom)"},
+        "api_key": {"type": "string", "description": "API key baru"},
+        "base_url": {"type": "string", "description": "Base URL API (contoh: https://api.openai.com/v1)"},
+        "model": {"type": "string", "description": "Nama model (contoh: gpt-4o, google/gemini-2.0-flash-001)"}
+    }, "required": []}}},
 ]
 
 tool_map = {
@@ -395,24 +437,39 @@ tool_map = {
     "github_clone": github_clone,
     "auto_run": auto_run,
     "auto_stop": auto_stop,
+    "change_provider": change_provider,
 }
 
-# ----------------------- MAIN LOOP -----------------------
+# ----------------------- DETEKSI PENGULANGAN TOOL -----------------------
+MAX_REPEATED_CALLS = 3   # maksimum panggilan tool identik berturut-turut
+
 def process_tool_calls(messages, tool_calls):
-    global active_project
+    global active_project, tool_call_counter
     new_msgs = []
     for tc in tool_calls:
         func_name = tc["function"]["name"]
         args = json.loads(tc["function"]["arguments"])
-        console.print(f"[dim]🔧 {func_name}[/]")
-        func = tool_map.get(func_name)
-        if func:
-            try:
-                result = func(**args)
-            except Exception as e:
-                result = f"ERROR: {e}"
+        args_str = json.dumps(args, sort_keys=True)  # urutkan supaya konsisten
+        key = f"{func_name}:{args_str}"
+
+        # Hitung pengulangan
+        tool_call_counter[key] = tool_call_counter.get(key, 0) + 1
+        if tool_call_counter[key] > MAX_REPEATED_CALLS:
+            console.print(f"[red]⚠ Tool {func_name} dipanggil >{MAX_REPEATED_CALLS}x dengan argumen sama. Diabaikan.[/]")
+            result = f"❌ Tindakan '{func_name}' diabaikan karena terlalu sering diulang dengan argumen yang sama."
         else:
-            result = "Tool tidak dikenal."
+            console.print(f"[dim]🔧 {func_name}[/]")
+            func = tool_map.get(func_name)
+            if func:
+                try:
+                    result = func(**args)
+                except TypeError as e:
+                    result = f"ERROR: Argumen tidak sesuai - {e}"
+                except Exception as e:
+                    result = f"ERROR: {e}"
+            else:
+                result = "Tool tidak dikenal."
+
         console.print(Panel(Syntax(str(result), "text", theme="monokai"), title=f"📤 {func_name}"))
         new_msgs.append({
             "role": "tool",
@@ -420,6 +477,8 @@ def process_tool_calls(messages, tool_calls):
             "name": func_name,
             "content": str(result)
         })
+
+        # Jika auto_run, mulai monitor
         if func_name == "auto_run":
             project = args.get("project_name")
             if project:
@@ -427,16 +486,21 @@ def process_tool_calls(messages, tool_calls):
                 t.start()
     return new_msgs
 
+# ----------------------- MAIN LOOP -----------------------
 def run_agent():
-    global active_project
+    global active_project, tool_call_counter
     load_config()
     model = os.getenv("MODEL", "meta-llama/llama-3.1-70b-instruct")
     SYSTEM_PROMPT = f"""Kamu AI Developer Agent di Termux. Dir: {CWD}
-Tools: baca/tulis/edit file, shell cmd, GitHub, auto_run/auto_stop proyek.
-Auto run: jika diminta menjalankan proyek, gunakan auto_run dengan command yang sesuai (contoh: python app.py, npm start, dll) dan project_name unik.
-Jika proyek sebelumnya berjalan, hentikan dulu dengan auto_stop.
-Jika ada error dari monitor, analisis dan perbaiki file terkait, lalu restart proyek.
-Gunakan bahasa Indonesia ramah."""
+Tools: baca/tulis/edit file, shell cmd, GitHub, auto_run/auto_stop, change_provider.
+
+PENTING:
+- Jangan mengulangi perintah yang sama jika hasilnya sudah jelas. Contoh: jika kamu sudah mengecek status server dan berhasil, jangan cek lagi.
+- Jika diminta membuat fitur, rencanakan dulu, lalu eksekusi. Setelah selesai, beri ringkasan dan berhenti.
+- Jangan membaca direktori yang sama berulang kali; gunakan informasi yang sudah kamu miliki.
+- Jika ada error dari monitor, analisis perbaikan **hanya satu kali**, jangan mengulangi siklus tanpa batas.
+- Gunakan change_provider jika pengguna ingin mengganti API/model.
+- Gunakan bahasa Indonesia ramah."""
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
 
@@ -449,16 +513,21 @@ Gunakan bahasa Indonesia ramah."""
     console.print(Panel.fit(
         f"[bold cyan]● AI Agent Ultimate[/]\n"
         f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}\n"
-        f"[dim]Fitur: Auto Update | Auto Run | Auto Fix | Log Panel[/]",
+        f"[dim]Fitur: Auto Update | Auto Run | Auto Fix | Log Panel | Anti‑Pengulangan | Ganti Provider[/]",
         border_style="bright_blue"))
 
     while True:
+        # Reset counter pengulangan setiap loop utama agar tidak menumpuk selamanya
+        tool_call_counter.clear()
+
         # Proses error dari queue (auto fix) SEBELUM prompt
         try:
             project, err_text = error_queue.get_nowait()
             console.print(Panel(f"[bold red]🐛 Error terdeteksi di {project}![/]\n{err_text[:500]}", title="Auto Monitor"))
             messages.append({"role": "user", "content": f"ERROR terdeteksi di proyek {project}:\n{err_text}\nPerbaiki dan restart."})
-            while True:
+            # Hanya sekali perbaikan, jangan loop, beri kesempatan user
+            retry_fix = 0
+            while retry_fix < 3:  # maks 3 percobaan perbaikan
                 try:
                     resp = chat_completion(messages, tools_spec)
                 except KeyboardInterrupt:
@@ -471,6 +540,10 @@ Gunakan bahasa Indonesia ramah."""
                 if "tool_calls" in msg:
                     tool_msgs = process_tool_calls(messages, msg["tool_calls"])
                     messages.extend(tool_msgs)
+                    retry_fix += 1
+                    # Jika tool sudah tidak ada lagi (mungkin sudah selesai), keluar
+                    if not tool_msgs:
+                        break
                 else:
                     if msg.get("content"):
                         console.print(Panel(Markdown(msg["content"]), title="🤖 AI (Auto Fix)", border_style="green"))
@@ -492,7 +565,9 @@ Gunakan bahasa Indonesia ramah."""
 
         messages.append({"role": "user", "content": user_input})
 
-        while True:
+        # Batasi iterasi agar tidak looping tanpa akhir (maks 20 langkah tool-call replies)
+        step = 0
+        while step < 20:
             try:
                 resp = chat_completion(messages, tools_spec)
             except KeyboardInterrupt:
@@ -506,6 +581,7 @@ Gunakan bahasa Indonesia ramah."""
             if "tool_calls" in msg:
                 tool_msgs = process_tool_calls(messages, msg["tool_calls"])
                 messages.extend(tool_msgs)
+                step += 1
             else:
                 if msg.get("content"):
                     console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
@@ -514,4 +590,7 @@ Gunakan bahasa Indonesia ramah."""
         show_log_panel(active_project)
 
 if __name__ == "__main__":
-    run_agent()
+    try:
+        run_agent()
+    except KeyboardInterrupt:
+        console.print("\n[red]Keluar.[/]")
