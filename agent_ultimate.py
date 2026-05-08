@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-AI Agent Ultimate – Animasi Thinking + Model Tools‑Capable Only
+AI Agent Ultimate – Multi-Provider (OpenAI, OpenRouter, Groq, Ollama, Custom)
++ Animasi Thinking, Anti-Pengulangan, Auto Run/Fix, Log Panel
 """
 
-import os, sys, subprocess, json, time, hashlib, queue, threading, re
+import os, sys, subprocess, json, time, hashlib, queue, threading
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -87,51 +88,56 @@ def check_and_update():
     except:
         return True
 
-# ----------------------- SETUP WIZARD (model direkomendasikan) -----------------------
+# ----------------------- SETUP WIZARD -----------------------
 def run_setup():
     console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard[/]", border_style="bright_blue"))
     providers = {
         "1": {"name": "OpenAI", "base": "https://api.openai.com/v1", "key_link": "https://platform.openai.com/api-keys"},
         "2": {"name": "OpenRouter", "base": "https://openrouter.ai/api/v1", "key_link": "https://openrouter.ai/keys"},
-        "3": {"name": "Custom", "base": "", "key_link": ""}
+        "3": {"name": "Groq", "base": "https://api.groq.com/openai/v1", "key_link": "https://console.groq.com/keys"},
+        "4": {"name": "Ollama (Local)", "base": "http://localhost:11434/v1", "key_link": ""},
+        "5": {"name": "Custom", "base": "", "key_link": ""}
     }
     for k, v in providers.items():
         console.print(f"  {k}. {v['name']}")
     choice = Prompt.ask("Pilih provider", choices=list(providers.keys()), default="2")
     provider = providers[choice]
-    console.print(f"\n[bold]API Key {provider['name']}[/]")
-    if provider["key_link"]:
-        console.print(f"🔗 Dapatkan: {provider['key_link']}")
-    api_key = password_prompt("Masukkan API key: ")
+
+    # API Key
+    if provider["name"] == "Ollama (Local)":
+        console.print("[dim]Ollama lokal tidak memerlukan API key.[/]")
+        api_key = ""
+    else:
+        console.print(f"\n[bold]API Key {provider['name']}[/]")
+        if provider["key_link"]:
+            console.print(f"🔗 Dapatkan: {provider['key_link']}")
+        api_key = password_prompt("Masukkan API key: ")
     set_key(ENV_FILE, "API_KEY", api_key)
     set_key(ENV_FILE, "API_PROVIDER", provider["name"])
-    if choice == "3":
-        console.print("Contoh base URL: https://api.groq.com/v1 (tanpa /chat/completions)")
-        base_url = Prompt.ask("Masukkan base URL").strip().rstrip('/')
+
+    # Base URL
+    if choice == "5" or provider["base"] == "":
+        base_url = Prompt.ask("Masukkan base URL (tanpa /chat/completions)").strip().rstrip('/')
         set_key(ENV_FILE, "API_BASE_URL", base_url)
     else:
         set_key(ENV_FILE, "API_BASE_URL", provider["base"])
 
-    # --- Model (hanya yang tools-capable untuk OpenRouter) ---
-    if choice == "1":
+    # Model
+    console.print("\n[bold]Pilih Model[/]")
+    if choice == "1":  # OpenAI
         models = ["gpt-4o", "gpt-4-turbo", "gpt-3.5-turbo", "Custom"]
-        console.print("[yellow]ℹ GPT‑3.5 mungkin kurang optimal untuk alat, disarankan GPT‑4o.[/]")
-    elif choice == "2":
+        console.print("[yellow]ℹ GPT‑3.5 mungkin kurang optimal untuk alat.[/]")
+    elif choice == "2":  # OpenRouter
+        console.print("[bold green]ℹ Model berikut teruji mendukung semua fitur agent:[/]")
         models = [
             "1. google/gemini-2.0-flash-001 ✅ (gratis, direkomendasikan)",
             "2. openai/gpt-4o (butuh kredit)",
             "3. anthropic/claude-3.5-sonnet (butuh kredit)",
             "4. Custom (masukkan ID sendiri)"
         ]
-        console.print("[bold green]ℹ Hanya model di atas yang sudah teruji mendukung semua fitur AI Agent.[/]")
-    else:
-        models = ["Custom"]
-
-    for m in models:
-        console.print(f"  {m}")
-    if choice == "2":
-        # Pilihan numerik 1..4
-        model_choice = Prompt.ask("Pilih nomor model", choices=["1","2","3","4"], default="1")
+        for m in models:
+            console.print(f"  {m}")
+        model_choice = Prompt.ask("Pilih nomor", choices=["1","2","3","4"], default="1")
         if model_choice == "1":
             model = "google/gemini-2.0-flash-001"
         elif model_choice == "2":
@@ -140,15 +146,32 @@ def run_setup():
             model = "anthropic/claude-3.5-sonnet"
         else:
             model = Prompt.ask("Masukkan ID model")
-    else:
-        model_choice = Prompt.ask("Pilih model", choices=[str(i) for i in range(1, len(models)+1)], default="1")
-        if models[int(model_choice)-1] == "Custom":
-            model = Prompt.ask("ID model")
+    elif choice == "3":  # Groq
+        models = [
+            "1. llama-3.1-70b-versatile",
+            "2. mixtral-8x7b-32768",
+            "3. gemma2-9b-it",
+            "4. Custom"
+        ]
+        for m in models:
+            console.print(f"  {m}")
+        model_choice = Prompt.ask("Pilih nomor", choices=["1","2","3","4"], default="1")
+        if model_choice == "1":
+            model = "llama-3.1-70b-versatile"
+        elif model_choice == "2":
+            model = "mixtral-8x7b-32768"
+        elif model_choice == "3":
+            model = "gemma2-9b-it"
         else:
-            model = models[int(model_choice)-1]
+            model = Prompt.ask("Masukkan ID model")
+    elif choice == "4":  # Ollama
+        model = Prompt.ask("Nama model (contoh: nemotron-3-super:cloud)", default="nemotron-3-super:cloud")
+    else:  # Custom
+        model = Prompt.ask("ID model")
+
     set_key(ENV_FILE, "MODEL", model)
 
-    # GitHub Token opsional
+    # GitHub Token
     console.print("\n[bold]🔐 GitHub Token (Opsional)[/]")
     github_token = password_prompt("GitHub Token: ")
     if github_token.strip():
@@ -174,6 +197,7 @@ def run_setup():
             console.print("[green]✓ gh CLI sudah login.[/]")
         except:
             console.print("[yellow]⚠ gh CLI belum login.[/]")
+
     d = Prompt.ask("Direktori kerja (kosongkan = sekarang)")
     if d.strip():
         set_key(ENV_FILE, "WORK_DIR", d)
@@ -183,7 +207,7 @@ def run_setup():
 def load_config():
     if ENV_FILE.exists():
         load_dotenv(ENV_FILE)
-    if not os.getenv("API_KEY"):
+    if not os.getenv("API_KEY") and not os.getenv("API_PROVIDER", "").startswith("Ollama"):
         run_setup()
         load_dotenv(ENV_FILE, override=True)
     work_dir = os.getenv("WORK_DIR")
@@ -203,7 +227,7 @@ def load_config():
             pass
     load_memory()
 
-# ----------------------- API CLIENT -----------------------
+# ----------------------- API CLIENT (non-stream) -----------------------
 def normalize_api_url(base):
     base = base.rstrip('/')
     return base if base.endswith('/chat/completions') else f"{base}/chat/completions"
@@ -256,7 +280,7 @@ def chat_completion(messages, tools=None, max_retries=3):
                 return {"error": f"Koneksi gagal: {e}"}
     return {"error": "Gagal"}
 
-# ----------------------- TOOLS (sama seperti sebelumnya) -----------------------
+# ----------------------- TOOLS (fungsi sama) -----------------------
 def check_github():
     try:
         subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
