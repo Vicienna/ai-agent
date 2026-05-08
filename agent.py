@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI Agent Ultimate – Cancel Feature + All previous fixes (rendering fix)
+AI Agent Ultimate – Fixed: Cancel text, robust tool errors
 """
 
-import os, sys, subprocess, json, time, hashlib, queue, threading
+import os, sys, subprocess, json, time, hashlib, queue, threading, signal
 from pathlib import Path
 import requests
 from requests.adapters import HTTPAdapter, Retry
@@ -433,11 +433,18 @@ def list_directory(path="."):
 
 def shell_command(cmd):
     try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60, cwd=CWD)
+        # If command is not found, don't crash, return error message
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60, cwd=CWD, executable="/data/data/com.termux/files/usr/bin/bash" if "ANDROID_ROOT" in os.environ else None)
         out = (res.stdout+res.stderr).strip()
-        return out or "(ok)"
-    except subprocess.TimeoutExpired: return "ERROR: Timeout"
-    except Exception as e: return f"ERROR: {e}"
+        if not out:
+            return "(ok)"
+        if "command not found" in out or "not found" in out:
+            return f"ERROR: Perintah tidak ditemukan. Coba gunakan busybox: busybox {cmd}"
+        return out
+    except subprocess.TimeoutExpired:
+        return "ERROR: Timeout 60s"
+    except Exception as e:
+        return f"ERROR: {e}"
 
 def read_file(path):
     f = (CWD/path).resolve()
@@ -518,7 +525,7 @@ def process_tool_calls(messages, tool_calls):
                 threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
     return new_msgs
 
-# ---------- DISPLAY STREAMING + TIMER + CANCEL ----------
+# ---------- DISPLAY STREAMING + TIMER + CANCEL (FIXED TEXT) ----------
 def display_stream(messages):
     start_time = time.time()
     thinking_text = ""
@@ -541,8 +548,9 @@ def display_stream(messages):
         else:
             panel_text.append("🧠 Thinking... ", style="bold yellow")
             panel_text.append(timer_str, style="bold magenta")
-        panel_text.append("\n", style="")
-        panel_text.append("(Ctrl+C untuk batal)", style="dim red")
+        # Cancel hint dengan style, bukan markup
+        panel_text.append("\n")
+        panel_text.append("(Ctrl+C untuk batal)", style="red")
         return Panel(panel_text, border_style="blue", title="Streaming")
 
     try:
@@ -578,7 +586,7 @@ def display_stream(messages):
 
     return final_msg, content_text
 
-# ---------- MAIN ----------
+# ---------- MAIN (dengan perlindungan crash) ----------
 def run_agent():
     global tool_call_counter, task_list
     load_config()
@@ -629,15 +637,25 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
             if not user_input.strip():
                 continue
 
+        # Simpan user message dulu
         messages.append({"role":"user","content":user_input})
         msg_index = len(messages) - 1
 
-        final_msg, content = display_stream(messages)
+        # Streaming dengan try-except agar agent tidak crash total
+        try:
+            final_msg, content = display_stream(messages)
+        except Exception as e:
+            console.print(f"[red]Error during streaming: {e}[/]")
+            del messages[msg_index]
+            continue
+
         if final_msg is None:
+            # Batal atau error, hapus user message terakhir
             if len(messages) > msg_index:
                 del messages[msg_index]
             continue
 
+        # Jika ada tool calls, jalankan tool dan lanjutkan
         if "tool_calls" in final_msg:
             messages.append(final_msg)
             try:
@@ -659,6 +677,10 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
                         break
             except KeyboardInterrupt:
                 console.print("\n[red]⚠ Dibatalkan saat eksekusi tools.[/]")
+                del messages[msg_index:]
+                continue
+            except Exception as e:
+                console.print(f"[red]Error tool: {e}[/]")
                 del messages[msg_index:]
                 continue
         else:
