@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AI Agent Ultimate – Direct & Streaming, Anti-Pengulangan, Change Provider, Auto Everything
+AI Agent Ultimate – Direct & Streaming (tanpa duplikasi + auto-capture tool JSON)
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -15,6 +15,7 @@ from rich.prompt import Prompt
 import git
 from dotenv import load_dotenv, set_key
 
+# ---------- password dengan bintang ----------
 def password_prompt(prompt_text="Password: "):
     import termios, tty
     console.print(prompt_text, end="")
@@ -73,21 +74,16 @@ def check_and_update():
     try:
         resp = requests.get(GITHUB_RAW_URL, timeout=10)
         if resp.status_code != 200:
-            console.print("[yellow]⚠ Gagal cek update: HTTP {}[/]".format(resp.status_code))
             return False
         remote_content = resp.text
         local_content = SCRIPT_PATH.read_text()
         if hashlib.md5(remote_content.encode()).hexdigest() != hashlib.md5(local_content.encode()).hexdigest():
             console.print("[bold cyan]🔃 Update tersedia! Memperbarui...[/]")
             SCRIPT_PATH.write_text(remote_content)
-            console.print("[bold green]✅ Script sudah diperbarui. Restart...[/]")
             os.execv(sys.executable, [sys.executable] + sys.argv)
-        else:
-            console.print("[dim]✓ Script sudah yang terbaru.[/]")
-            return True
-    except Exception as e:
-        console.print(f"[yellow]⚠ Gagal cek update: {e}[/]")
-    return True
+        return True
+    except:
+        return True
 
 def run_setup():
     console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard[/]", border_style="bright_blue"))
@@ -107,7 +103,6 @@ def run_setup():
     set_key(ENV_FILE, "API_KEY", api_key)
     set_key(ENV_FILE, "API_PROVIDER", provider["name"])
     if choice == "3":
-        console.print("Contoh base URL: https://api.groq.com/v1 (tanpa /chat/completions)")
         base_url = Prompt.ask("Masukkan base URL").strip().rstrip('/')
         set_key(ENV_FILE, "API_BASE_URL", base_url)
     else:
@@ -136,8 +131,6 @@ def run_setup():
     set_key(ENV_FILE, "MODEL", model)
 
     console.print("\n[bold]🔐 GitHub Token (Opsional)[/]")
-    console.print("Masukkan Personal Access Token (classic) scope repo & user.")
-    console.print("Kosongkan jika sudah login gh CLI.")
     github_token = password_prompt("GitHub Token: ")
     if github_token.strip():
         try:
@@ -154,9 +147,6 @@ def run_setup():
                     os.environ["GITHUB_USER"] = github_username
                     subprocess.run(["git", "config", "--global", "user.name", github_name], check=False)
                     subprocess.run(["git", "config", "--global", "user.email", github_email], check=False)
-                    console.print(f"[green]✓ Git config: {github_name} <{github_email}>[/]")
-            else:
-                console.print(f"[red]Gagal login gh: {login_res.stderr}[/]")
         except Exception as e:
             console.print(f"[red]Error: {e}[/]")
     else:
@@ -164,7 +154,7 @@ def run_setup():
             subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
             console.print("[green]✓ gh CLI sudah login.[/]")
         except:
-            console.print("[yellow]⚠ gh CLI belum login, fitur GitHub mungkin tidak berfungsi.[/]")
+            console.print("[yellow]⚠ gh CLI belum login.[/]")
     d = Prompt.ask("Direktori kerja (kosongkan = sekarang)")
     if d.strip():
         set_key(ENV_FILE, "WORK_DIR", d)
@@ -298,6 +288,7 @@ def chat_completion_nonstream(messages, tools=None, max_retries=3):
                 return {"error": f"Koneksi gagal: {e}"}
     return {"error": "Gagal"}
 
+# ---------- TOOLS (tidak berubah) ----------
 def check_github():
     try:
         subprocess.run(["gh", "auth", "status"], check=True, capture_output=True)
@@ -515,6 +506,11 @@ def process_tool_calls(messages, tool_calls):
     for tc in tool_calls:
         func_name = tc["function"]["name"]
         args = tc["function"]["arguments"]
+        if isinstance(args, str):
+            try:
+                args = json.loads(args)
+            except:
+                pass
         key = f"{func_name}:{json.dumps(args, sort_keys=True)}"
         tool_call_counter[key] = tool_call_counter.get(key,0)+1
         if tool_call_counter[key] > MAX_REPEATED:
@@ -528,7 +524,7 @@ def process_tool_calls(messages, tool_calls):
             except Exception as e:
                 result = f"ERROR: {e}"
         console.print(Panel(Syntax(str(result),"text",theme="monokai"), title=f"📤 {func_name}"))
-        new_msgs.append({"role":"tool","tool_call_id":tc["id"],"name":func_name,"content":str(result)})
+        new_msgs.append({"role":"tool","tool_call_id":tc.get("id","manual"),"name":func_name,"content":str(result)})
         if func_name == "auto_run":
             proj = args.get("project_name")
             if proj:
@@ -606,30 +602,59 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia ramah
         final_msg = show_streamed_response(user_input, SYSTEM_PROMPT, messages)
         if final_msg is None:
             continue
-
         messages.append({"role":"user","content": user_input})
+
+        # --- Deteksi tool call (asli atau JSON mentah) ---
         if "tool_calls" in final_msg:
             messages.append(final_msg)
             tool_msgs = process_tool_calls(messages, final_msg["tool_calls"])
             messages.extend(tool_msgs)
-            for _ in range(5):
-                resp = chat_completion_nonstream(messages, tools_spec)
-                if "error" in resp:
-                    console.print(f"[red]{resp['error']}[/]")
-                    break
-                msg = resp["choices"][0]["message"]
-                messages.append(msg)
-                if "tool_calls" in msg:
-                    tool_msgs = process_tool_calls(messages, msg["tool_calls"])
-                    messages.extend(tool_msgs)
-                else:
-                    if msg.get("content"):
-                        console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
-                    break
         else:
-            messages.append(final_msg)
-            if final_msg.get("content"):
-                console.print(Panel(Markdown(final_msg["content"]), title="🤖 AI", border_style="green"))
+            content = final_msg.get("content","")
+            # Cek apakah konten adalah JSON tool call mentah
+            if content.strip().startswith('{"name"') or content.strip().startswith('{"function"'):
+                try:
+                    possible_tool = json.loads(content)
+                    # Bisa berupa {"name":..., "parameters":...} atau {"function":...}
+                    if "function" in possible_tool:
+                        func_block = possible_tool["function"]
+                    else:
+                        func_block = possible_tool
+                    if "name" in func_block and "parameters" in func_block:
+                        fake_tc = [{"id":"manual","type":"function","function": func_block}]
+                        tool_msgs = process_tool_calls(messages, fake_tc)
+                        messages.extend(tool_msgs)
+                        # Lanjutkan dengan non-stream untuk hasil
+                except:
+                    # Bukan tool call, jadi tampilkan sebagai teks biasa
+                    if content:
+                        console.print(Panel(Markdown(content), title="🤖 AI", border_style="green"))
+                    messages.append(final_msg)
+                    show_log_panel(active_project)
+                    continue
+            else:
+                # Teks biasa
+                if content:
+                    console.print(Panel(Markdown(content), title="🤖 AI", border_style="green"))
+                messages.append(final_msg)
+                show_log_panel(active_project)
+                continue
+
+        # Jika tadi ada tool call (asli atau manual), lanjutkan loop non-stream untuk respons setelah tool
+        for _ in range(5):
+            resp = chat_completion_nonstream(messages, tools_spec)
+            if "error" in resp:
+                console.print(f"[red]{resp['error']}[/]")
+                break
+            msg = resp["choices"][0]["message"]
+            messages.append(msg)
+            if "tool_calls" in msg:
+                tool_msgs = process_tool_calls(messages, msg["tool_calls"])
+                messages.extend(tool_msgs)
+            else:
+                if msg.get("content"):
+                    console.print(Panel(Markdown(msg["content"]), title="🤖 AI", border_style="green"))
+                break
 
         show_log_panel(active_project)
 
