@@ -15,6 +15,7 @@ from rich.syntax import Syntax
 from rich.prompt import Prompt
 from rich.live import Live
 from rich.text import Text
+from rich.align import Align
 import git
 from dotenv import load_dotenv, set_key
 
@@ -100,7 +101,6 @@ def install_trigger():
             target_dir.mkdir(exist_ok=True)
         trigger_path = target_dir / "tagent"
         script_path = SCRIPT_PATH.resolve()
-        # Buat wrapper bash
         with open(trigger_path, 'w') as f:
             f.write(f"#!/bin/bash\ncd \"{script_path.parent}\" && python \"{script_path}\" \"$@\"\n")
         os.chmod(trigger_path, 0o755)
@@ -181,7 +181,6 @@ def run_setup():
     if d.strip():
         set_key(ENV_FILE, "WORK_DIR", d)
 
-    # Buat trigger tagent
     if Prompt.ask("Buat perintah global 'tagent'?", choices=["y","n"], default="y") == "y":
         install_trigger()
 
@@ -311,7 +310,7 @@ def chat_completion_nonstream(messages, tools=None, max_retries=3):
                 return {"error": f"Koneksi gagal: {e}"}
     return {"error": "Gagal"}
 
-# ---------- TOOLS (sama seperti sebelumnya) ----------
+# ---------- TOOLS ----------
 def check_github():
     try:
         subprocess.run(["gh","auth","status"], check=True, capture_output=True)
@@ -619,20 +618,22 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
     time.sleep(1)
     os.system('clear')
 
-    # Banner keren
-    banner = Text()
-    banner.append("╔══════════════════════════════════════════════╗\n", style="bright_cyan")
-    banner.append("║          ", style="bright_cyan")
-    banner.append("🤖  T A G E N T  🤖", style="bold white on blue")
-    banner.append("           ║\n", style="bright_cyan")
-    banner.append("║                                              ║\n", style="bright_cyan")
-    banner.append("║  Creator : Vicienna                           ║\n", style="cyan")
-    banner.append("║  Source  : github.com/Vicienna/ai-agent      ║\n", style="cyan")
-    banner.append("║  IG: ceena.dev  GitHub: Vicienna              ║\n", style="cyan")
-    banner.append("║  Discord: hallo.dev                           ║\n", style="cyan")
-    banner.append("║                                              ║\n", style="bright_cyan")
-    banner.append("╚══════════════════════════════════════════════╝", style="bright_cyan")
-    console.print(banner)
+    # Banner keren (rata otomatis)
+    banner_text = Text()
+    banner_text.append("🤖  T A G E N T  🤖\n\n", style="bold white on blue")
+    banner_text.append("Creator : Vicienna\n", style="cyan")
+    banner_text.append("Source  : github.com/Vicienna/ai-agent\n", style="cyan")
+    banner_text.append("IG: ceena.dev  GitHub: Vicienna\n", style="cyan")
+    banner_text.append("Discord: hallo.dev", style="cyan")
+
+    banner_panel = Panel(
+        Align.center(banner_text),
+        border_style="bright_cyan",
+        padding=(1, 2),
+        title="Welcome",
+        title_align="left"
+    )
+    console.print(banner_panel)
 
     info = f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}"
     console.print(Panel(info, border_style="blue"))
