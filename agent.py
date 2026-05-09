@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Tagent – Your AI Agent by Vicienna
+Developer Mode added
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -50,6 +51,7 @@ ENV_FILE = Path(__file__).parent / ".env"
 CWD = Path.cwd()
 active_project = None
 tool_call_counter = {}
+DEVELOPER_MODE = False  # akan diatur nanti
 
 memory_file = Path(__file__).parent / "agent_memory.json"
 task_list = []
@@ -187,6 +189,7 @@ def run_setup():
     console.print("[green]✅ Setup selesai![/]")
 
 def load_config():
+    global DEVELOPER_MODE
     if ENV_FILE.exists():
         load_dotenv(ENV_FILE)
     if not os.getenv("API_KEY") and not os.getenv("API_PROVIDER","").startswith("Ollama"):
@@ -207,6 +210,9 @@ def load_config():
                     os.environ["GITHUB_USER"] = login
         except:
             pass
+    # Check developer mode
+    github_user = os.getenv("GITHUB_USER", "").strip()
+    DEVELOPER_MODE = (github_user.lower() == "vicienna")
     load_memory()
 
 # ---------- API ----------
@@ -603,12 +609,13 @@ def display_stream(messages):
 
 # ---------- MAIN ----------
 def run_agent():
-    global tool_call_counter, task_list
+    global tool_call_counter, task_list, DEVELOPER_MODE
     load_config()
     model = os.getenv("MODEL","google/gemini-2.0-flash-001")
     SYSTEM_PROMPT = f"""Kamu Tagent, AI Developer Agent di Termux. Dir: {CWD}
 Tools: baca/tulis/edit file, shell cmd, GitHub, auto_run/stop, change_provider.
-Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
+Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia.
+{'Kamu sedang dalam mode Developer. Kamu bisa mengedit dan push langsung ke repository ai-agent.' if DEVELOPER_MODE else ''}"""
 
     messages = [{"role":"system","content":SYSTEM_PROMPT}]
 
@@ -618,25 +625,24 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
     time.sleep(1)
     os.system('clear')
 
-    # Banner keren (rata otomatis)
+    # Banner
     banner_text = Text()
     banner_text.append("🤖  T A G E N T  🤖\n\n", style="bold white on blue")
     banner_text.append("Creator : Vicienna\n", style="cyan")
     banner_text.append("Source  : github.com/Vicienna/ai-agent\n", style="cyan")
     banner_text.append("IG: ceena.dev  GitHub: Vicienna\n", style="cyan")
     banner_text.append("Discord: hallo.dev", style="cyan")
-
-    banner_panel = Panel(
-        Align.center(banner_text),
-        border_style="bright_cyan",
-        padding=(1, 2),
-        title="Welcome",
-        title_align="left"
-    )
+    banner_panel = Panel(Align.center(banner_text), border_style="bright_cyan", padding=(1,2), title="Welcome", title_align="left")
     console.print(banner_panel)
 
-    info = f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {'✅' if check_github() else '❌'}"
-    console.print(Panel(info, border_style="blue"))
+    # Info bar dengan Developer
+    gh_status = "✅" if check_github() else "❌"
+    dev_status = "✅" if DEVELOPER_MODE else "❌"
+    info_text = f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {gh_status} | Developer: {dev_status}"
+    console.print(Panel(info_text, border_style="blue"))
+
+    if DEVELOPER_MODE:
+        console.print("[yellow]👑 Mode Developer aktif – Anda dapat mengedit repository ai-agent langsung.[/]")
 
     if task_list:
         console.print(f"[yellow]📋 {len(task_list)} tugas auto‑fix.[/]")
@@ -699,6 +705,8 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
                     else:
                         if msg.get("content"):
                             console.print(Panel(Markdown(msg["content"]), title="🤖 Tagent", border_style="green"))
+                        else:
+                            console.print("[dim]✅ Selesai.[/]")
                         break
             except KeyboardInterrupt:
                 console.print("\n[red]⚠ Dibatalkan saat eksekusi tools.[/]")
@@ -712,6 +720,8 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia."""
             messages.append(final_msg)
             if content:
                 console.print(Panel(Markdown(content), title="🤖 Tagent", border_style="green"))
+            else:
+                console.print("[dim]✅ Selesai.[/]")
 
         show_log_panel(active_project)
 
