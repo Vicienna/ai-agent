@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 Tagent – Your AI Agent by Vicienna
-Developer Mode + Per‑Project Memory + Smart Context
++ Working indicator saat eksekusi tool
++ Fix edit_file parameter
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -17,6 +18,7 @@ from rich.prompt import Prompt
 from rich.live import Live
 from rich.text import Text
 from rich.align import Align
+from rich.status import Status
 import git
 from dotenv import load_dotenv, set_key
 
@@ -49,51 +51,29 @@ def password_prompt(prompt_text="Password: "):
 console = Console()
 ENV_FILE = Path(__file__).parent / ".env"
 CWD = Path.cwd()
-active_project = None      # nama proyek yang sedang aktif
+active_project = None
 tool_call_counter = {}
 DEVELOPER_MODE = False
 
-# ---------- PROJECT MEMORY ----------
-PROJECT_MEMORY_DIR = Path(__file__).parent / "project_memories"
-PROJECT_MEMORY_DIR.mkdir(exist_ok=True)
+memory_file = Path(__file__).parent / "agent_memory.json"
+task_list = []
+completed_tasks = []
 
-def get_project_memory_file(project_name):
-    if not project_name:
-        return None
-    return PROJECT_MEMORY_DIR / f"{project_name}.json"
-
-def load_project_memory(project_name):
-    """Muat tasks & history dari file memory proyek."""
-    file = get_project_memory_file(project_name)
-    if file and file.exists():
+def load_memory():
+    global task_list, completed_tasks
+    if memory_file.exists():
         try:
-            data = json.loads(file.read_text())
-            return data.get("tasks", []), data.get("history", [])
+            data = json.loads(memory_file.read_text())
+            task_list = data.get("pending", [])
+            completed_tasks = data.get("completed", [])
         except:
             pass
-    return [], []
 
-def save_project_memory(project_name, tasks, history):
-    if not project_name:
-        return
-    file = get_project_memory_file(project_name)
-    file.write_text(json.dumps({"tasks": tasks, "history": history}, indent=2))
-
-# Global variables untuk current project
-current_tasks = []
-current_history = []
-
-def switch_project(project_name):
-    global active_project, current_tasks, current_history
-    if active_project == project_name:
-        return
-    # Simpan yang lama
-    if active_project:
-        save_project_memory(active_project, current_tasks, current_history)
-    # Muat yang baru
-    active_project = project_name
-    current_tasks, current_history = load_project_memory(project_name)
-    console.print(f"[dim]📂 Beralih ke proyek: {project_name}[/]")
+def save_memory():
+    memory_file.write_text(json.dumps({
+        "pending": task_list,
+        "completed": completed_tasks
+    }, indent=2))
 
 # ----------------------- AUTO UPDATE -----------------------
 GITHUB_RAW_URL = "https://raw.githubusercontent.com/Vicienna/ai-agent/main/agent.py"
@@ -210,7 +190,7 @@ def run_setup():
     console.print("[green]✅ Setup selesai![/]")
 
 def load_config():
-    global DEVELOPER_MODE, active_project, current_tasks, current_history
+    global DEVELOPER_MODE
     if ENV_FILE.exists():
         load_dotenv(ENV_FILE)
     if not os.getenv("API_KEY") and not os.getenv("API_PROVIDER","").startswith("Ollama"):
@@ -233,9 +213,7 @@ def load_config():
             pass
     github_user = os.getenv("GITHUB_USER", "").strip()
     DEVELOPER_MODE = (github_user.lower() == "vicienna")
-    # Tentukan proyek awal dari CWD
-    initial_project = CWD.name
-    switch_project(initial_project)
+    load_memory()
 
 # ---------- API ----------
 def normalize_api_url(base):
@@ -338,7 +316,7 @@ def chat_completion_nonstream(messages, tools=None, max_retries=3):
                 return {"error": f"Koneksi gagal: {e}"}
     return {"error": "Gagal"}
 
-# ---------- TOOLS (unchanged except save memory after tool calls that affect project) ----------
+# ---------- TOOLS (edit_file di-fix) ----------
 def check_github():
     try:
         subprocess.run(["gh","auth","status"], check=True, capture_output=True)
@@ -410,13 +388,14 @@ def auto_run(command, project_name):
     subprocess.run(["tmux","kill-session","-t",project_name], capture_output=True)
     log = LOG_DIR / f"{project_name}.log"
     subprocess.run(["tmux","new-session","-d","-s",project_name, f"bash -c '{command} 2>&1 | tee {log}'"])
-    if project_name != active_project:
-        switch_project(project_name)
+    active_project = project_name
     return f"Proyek {project_name} dijalankan. Log: {log}"
 
 def auto_stop(project_name):
     global active_project
     subprocess.run(["tmux","kill-session","-t",project_name], capture_output=True)
+    if active_project == project_name:
+        active_project = None
     return f"Sesi {project_name} dihentikan."
 
 error_queue = queue.Queue()
@@ -460,13 +439,11 @@ def change_provider(provider=None, api_key=None, base_url=None, model=None):
     return f"✅ Provider diubah: {os.getenv('API_PROVIDER')} | Model: {os.getenv('MODEL')}"
 
 def change_directory(path):
-    global CWD, active_project
+    global CWD
     try:
         new = (CWD/path).resolve()
         if not new.is_dir(): return f"ERROR: {path} bukan direktori."
         os.chdir(new); CWD = new
-        # Auto switch project saat pindah direktori
-        switch_project(new.name)
         return f"Pindah ke {CWD}"
     except Exception as e: return f"ERROR: {e}"
 
@@ -501,12 +478,23 @@ def write_file(path, content):
     f.write_text(content)
     return f"✅ {path} ditulis ({len(content)} karakter)."
 
-def edit_file(path, old, new):
+def edit_file(path, old_str, new_str, **kwargs):
+    """Edit file dengan find/replace. Menerima **kwargs untuk menangani parameter dari AI yang mungkin berbeda."""
     f = (CWD/path).resolve()
-    if not f.is_file(): return f"ERROR: {path} tidak ditemukan."
+    if not f.is_file():
+        return f"ERROR: {path} tidak ditemukan."
     text = f.read_text()
-    if old not in text: return "ERROR: string tidak ditemukan."
-    f.write_text(text.replace(old, new, 1))
+    # Jika old_str tidak ditemukan, coba alternatif dari kwargs
+    search = old_str
+    if search not in text:
+        # Coba beberapa nama parameter alternatif yang mungkin dikirim AI
+        for key in ["old_string", "old", "find", "search"]:
+            if key in kwargs and kwargs[key] in text:
+                search = kwargs[key]
+                break
+    if search not in text:
+        return "ERROR: string tidak ditemukan dalam file."
+    f.write_text(text.replace(search, new_str, 1))
     return f"✅ {path} diedit."
 
 tools_spec = [
@@ -515,7 +503,7 @@ tools_spec = [
     {"type":"function","function":{"name":"shell_command","description":"Jalankan perintah shell.","parameters":{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}}},
     {"type":"function","function":{"name":"read_file","description":"Baca file.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
     {"type":"function","function":{"name":"write_file","description":"Tulis file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}},
-    {"type":"function","function":{"name":"edit_file","description":"Edit file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_str":{"type":"string"},"new_str":{"type":"string"}},"required":["path","old_str","new_str"]}}},
+    {"type":"function","function":{"name":"edit_file","description":"Edit file (replace string).","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_str":{"type":"string"},"new_str":{"type":"string"}},"required":["path","old_str","new_str"]}}},
     {"type":"function","function":{"name":"github_create_repo","description":"Buat repo GitHub.","parameters":{"type":"object","properties":{"name":{"type":"string"},"private":{"type":"boolean","default":False},"description":{"type":"string","default":""}},"required":["name"]}}},
     {"type":"function","function":{"name":"github_push","description":"Push ke GitHub.","parameters":{"type":"object","properties":{"commit_msg":{"type":"string","default":"Update from Tagent"}}}}},
     {"type":"function","function":{"name":"github_clone","description":"Clone repo.","parameters":{"type":"object","properties":{"repo_url":{"type":"string"},"target_dir":{"type":"string","default":""}},"required":["repo_url"]}}},
@@ -542,7 +530,7 @@ tool_map = {
 MAX_REPEATED = 3
 
 def process_tool_calls(messages, tool_calls):
-    global tool_call_counter, active_project, current_tasks
+    global tool_call_counter
     new_msgs = []
     for tc in tool_calls:
         func_name = tc["function"]["name"]
@@ -556,12 +544,14 @@ def process_tool_calls(messages, tool_calls):
             console.print(f"[red]⚠ {func_name} diulang >{MAX_REPEATED}x. Diabaikan.[/]")
             result = f"❌ Tindakan '{func_name}' diabaikan."
         else:
-            console.print(f"[dim]🔧 {func_name}[/]")
-            func = tool_map.get(func_name)
-            try:
-                result = func(**args) if func else "Tool tidak dikenal."
-            except Exception as e:
-                result = f"ERROR: {e}"
+            # Tampilkan status "⚙️ Mengerjakan..." sebelum menjalankan
+            with console.status(f"[bold yellow]⚙️  {func_name}...[/]", spinner="dots"):
+                func = tool_map.get(func_name)
+                try:
+                    result = func(**args) if func else "Tool tidak dikenal."
+                except Exception as e:
+                    result = f"ERROR: {e}"
+        console.print(f"[dim]🔧 {func_name}[/]")
         console.print(Panel(Syntax(str(result),"text",theme="monokai"), title=f"📤 {func_name}"))
         new_msgs.append({"role":"tool","tool_call_id":tc.get("id","manual"),"name":func_name,"content":str(result)})
         if func_name == "auto_run":
@@ -569,38 +559,6 @@ def process_tool_calls(messages, tool_calls):
             if project:
                 threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
     return new_msgs
-
-# ---------- AI MEMORY ANALYSIS ----------
-def needs_memory(user_input, project_name):
-    """Tanya AI kecil apakah input berkaitan dengan project yang sedang berjalan."""
-    if not project_name:
-        return False
-    # Prompt ringkas
-    prompt = f"""Anda adalah asisten yang menentukan apakah input pengguna berikut berkaitan dengan project "{project_name}".
-Jawab HANYA "true" atau "false".
-Input: "{user_input}"
-Apakah ini berkaitan dengan project "{project_name}"?"""
-    messages = [{"role":"system","content":"Anda adalah analis konteks."},
-                {"role":"user","content": prompt}]
-    # Gunakan non-stream, model kecil, tanpa tools
-    api_key = os.getenv("API_KEY")
-    base_url = os.getenv("API_BASE_URL")
-    provider = os.getenv("API_PROVIDER","")
-    model = os.getenv("MODEL")  # pakai model yang sama, bisa dihemat jika model besar
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-    payload = {"model": model, "messages": messages, "temperature": 0, "max_tokens": 5}
-    if "OpenRouter" in provider:
-        headers["HTTP-Referer"] = "http://localhost"
-        headers["X-Title"] = "Tagent"
-    try:
-        resp = requests.post(normalize_api_url(base_url), headers=headers, json=payload, timeout=15)
-        if resp.status_code == 200:
-            answer = resp.json()["choices"][0]["message"]["content"].strip().lower()
-            return answer == "true"
-    except:
-        pass
-    # Fallback: False (jangan muat memory)
-    return False
 
 # ---------- DISPLAY STREAMING + TIMER + CANCEL ----------
 def display_stream(messages):
@@ -664,13 +622,13 @@ def display_stream(messages):
 
 # ---------- MAIN ----------
 def run_agent():
-    global tool_call_counter, active_project, current_tasks, current_history, DEVELOPER_MODE
+    global tool_call_counter, task_list, DEVELOPER_MODE
     load_config()
     model = os.getenv("MODEL","google/gemini-2.0-flash-001")
-    SYSTEM_PROMPT = f"""Kamu Tagent, AI Developer Agent di Termux. Dir: {CWD} | Proyek: {active_project or 'none'}
+    SYSTEM_PROMPT = f"""Kamu Tagent, AI Developer Agent di Termux. Dir: {CWD}
 Tools: baca/tulis/edit file, shell cmd, GitHub, auto_run/stop, change_provider.
 Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia.
-{'Kamu dalam mode Developer. Kamu bisa mengedit dan push langsung ke repository ai-agent.' if DEVELOPER_MODE else ''}"""
+{'Kamu sedang dalam mode Developer. Kamu bisa mengedit dan push langsung ke repository ai-agent.' if DEVELOPER_MODE else ''}"""
 
     messages = [{"role":"system","content":SYSTEM_PROMPT}]
 
@@ -692,30 +650,28 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia.
 
     gh_status = "✅" if check_github() else "❌"
     dev_status = "✅" if DEVELOPER_MODE else "❌"
-    info_text = f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {gh_status} | Developer: {dev_status} | Proyek: {active_project or 'none'}"
+    info_text = f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {gh_status} | Developer: {dev_status}"
     console.print(Panel(info_text, border_style="blue"))
 
     if DEVELOPER_MODE:
         console.print("[yellow]👑 Mode Developer aktif – Anda dapat mengedit repository ai-agent langsung.[/]")
 
-    # Auto‑fix tasks dari memory
-    if current_tasks:
-        console.print(f"[yellow]📋 {len(current_tasks)} tugas tersimpan di proyek {active_project}.[/]")
+    if task_list:
+        console.print(f"[yellow]📋 {len(task_list)} tugas auto‑fix.[/]")
 
     while True:
         tool_call_counter.clear()
-        # Cek error log dari monitor (untuk auto‑fix)
         try:
             proj, err = error_queue.get_nowait()
             console.print(Panel(f"[red]🐛 Error di {proj}![/]\n{err[:500]}", title="Auto Monitor"))
-            current_tasks.append(f"Perbaiki error di proyek {proj}: {err[:200]}")
-            save_project_memory(active_project, current_tasks, current_history)
+            task_list.append(f"Perbaiki error di {proj}: {err[:200]}")
+            save_memory()
         except queue.Empty:
             pass
 
-        if current_tasks:
-            user_input = current_tasks.pop(0)
-            save_project_memory(active_project, current_tasks, current_history)
+        if task_list:
+            user_input = task_list.pop(0)
+            save_memory()
             console.print(f"[yellow]🔧 Auto‑fix: {user_input}[/]")
         else:
             try:
@@ -728,76 +684,58 @@ Kerjakan tugas dengan efisien, tanpa pengulangan. Gunakan bahasa Indonesia.
             if not user_input.strip():
                 continue
 
-        # Tentukan apakah perlu memory proyek
-        use_memory = active_project and needs_memory(user_input, active_project)
+        messages.append({"role":"user","content":user_input})
+        msg_index = len(messages) - 1
 
-        # Bangun pesan yang akan dikirim
-        if use_memory:
-            # Sisipkan history proyek setelah system prompt
-            context_messages = [{"role":"system","content":SYSTEM_PROMPT}]
-            # Tambahkan history yang sudah disimpan (maks 10 pertukaran terakhir)
-            for h in current_history[-20:]:
-                context_messages.append(h)
-            context_messages.append({"role":"user","content":user_input})
-            current_msg_list = context_messages
-        else:
-            # Mode segar, hanya system prompt dan user input
-            current_msg_list = [{"role":"system","content":SYSTEM_PROMPT}, {"role":"user","content":user_input}]
-
-        # Tampilkan streaming
-        final_msg, content = None, ""
+        # Streaming response
         try:
-            final_msg, content = display_stream(current_msg_list)
+            final_msg, content = display_stream(messages)
         except Exception as e:
             console.print(f"[red]Stream error: {e}[/]")
+            del messages[msg_index]
             continue
 
         if final_msg is None:
+            if len(messages) > msg_index:
+                del messages[msg_index]
             continue
 
-        # Simpan ke history proyek jika memory digunakan
-        if use_memory:
-            current_history.append({"role":"user","content":user_input})
-            current_history.append(final_msg)
-            # Batasi history agar tidak kepanjangan
-            if len(current_history) > 40:
-                current_history = current_history[-40:]
-            save_project_memory(active_project, current_tasks, current_history)
-
-        # Proses tool calls (seperti sebelumnya)
+        # Jika ada tool calls, kita tunjukkan indikator "Mengerjakan..." sebelum eksekusi
         if "tool_calls" in final_msg:
-            # Lanjutkan dengan messages yang sudah ditambah history (kalau ada)
-            if use_memory:
-                messages = current_msg_list
-            else:
-                messages = [{"role":"system","content":SYSTEM_PROMPT}, {"role":"user","content":user_input}]
             messages.append(final_msg)
             try:
-                tool_msgs = process_tool_calls(messages, final_msg["tool_calls"])
-                messages.extend(tool_msgs)
-                for _ in range(5):
-                    resp = chat_completion_nonstream(messages, tools_spec)
-                    if "error" in resp:
-                        console.print(f"[red]{resp['error']}[/]")
-                        break
-                    msg = resp["choices"][0]["message"]
-                    messages.append(msg)
-                    if "tool_calls" in msg:
-                        tool_msgs = process_tool_calls(messages, msg["tool_calls"])
-                        messages.extend(tool_msgs)
-                    else:
-                        if msg.get("content"):
-                            console.print(Panel(Markdown(msg["content"]), title="🤖 Tagent", border_style="green"))
-                        else:
-                            console.print("[dim]✅ Selesai.[/]")
-                        break
+                with console.status("[bold cyan]⚙️  Mengerjakan perintah...[/]", spinner="dots"):
+                    tool_msgs = process_tool_calls(messages, final_msg["tool_calls"])
+                    messages.extend(tool_msgs)
             except KeyboardInterrupt:
                 console.print("\n[red]⚠ Dibatalkan saat eksekusi tools.[/]")
+                del messages[msg_index:]
                 continue
             except Exception as e:
                 console.print(f"[red]Tool error: {e}[/]")
+                del messages[msg_index:]
                 continue
+
+            # Loop lanjutan tool (jika AI butuh tool lagi)
+            for _ in range(5):
+                with console.status("[bold cyan]🤖 Meminta respon lanjutan...[/]", spinner="dots"):
+                    resp = chat_completion_nonstream(messages, tools_spec)
+                if "error" in resp:
+                    console.print(f"[red]{resp['error']}[/]")
+                    break
+                msg = resp["choices"][0]["message"]
+                messages.append(msg)
+                if "tool_calls" in msg:
+                    tool_msgs = process_tool_calls(messages, msg["tool_calls"])
+                    messages.extend(tool_msgs)
+                else:
+                    if msg.get("content"):
+                        console.print(Panel(Markdown(msg["content"]), title="🤖 Tagent", border_style="green"))
+                    else:
+                        console.print("[dim]✅ Selesai.[/]")
+                    break
         else:
+            messages.append(final_msg)
             if content:
                 console.print(Panel(Markdown(content), title="🤖 Tagent", border_style="green"))
             else:
