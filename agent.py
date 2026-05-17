@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 Tagent – Your AI Agent by Vicienna
-+ Safe Project Folder, Full Memory Cache, Tool Status Bar,
-+ Auto .gitignore, Smart Analysis
++ Safe Project Folder, Full Memory Cache, Tool Status Bar
++ Auto .gitignore, Smart Git Handling, Submodule Detection
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -55,7 +55,7 @@ active_project = None
 tool_call_counter = {}
 DEVELOPER_MODE = False
 
-# ---------- PROJECT MEMORY (persistent cache) ----------
+# ---------- PROJECT MEMORY ----------
 PROJECT_MEMORY_DIR = Path(__file__).parent / "project_memories"
 PROJECT_MEMORY_DIR.mkdir(exist_ok=True)
 
@@ -105,7 +105,6 @@ def needs_memory(user_input, project_name):
     keywords = [project_name.lower(), "proyek", "lanjut", "ubah", "edit", "file", "kode", "push", "commit", "jalankan"]
     return any(kw in user_input.lower() for kw in keywords)
 
-# Cache helpers
 def cache_dir(path, entries):
     rel = str(Path(path).relative_to(PROJECTS_DIR))
     current_dir_cache[rel] = {"entries": entries, "time": time.time()}
@@ -294,7 +293,7 @@ def chat_completion_nonstream(messages, tools=None, max_retries=3):
             else: return {"error": f"Koneksi gagal: {e}"}
     return {"error":"Gagal"}
 
-# ---------- TOOLS (dengan pembatasan folder) ----------
+# ---------- TOOLS ----------
 def check_github():
     try: subprocess.run(["gh","auth","status"], check=True, capture_output=True); return True
     except: return False
@@ -310,6 +309,23 @@ def ensure_git_identity():
             w = repo.config_writer(); w.set_value("user","email",email); w.set_value("user","name",name); w.release()
     except: pass
 
+def ensure_git_remote(repo_name):
+    """Pastikan remote origin sudah benar."""
+    try:
+        result = subprocess.run(["git", "remote", "get-url", "origin"], 
+                               capture_output=True, text=True, cwd=CWD)
+        if result.returncode != 0:
+            user = os.getenv("GITHUB_USER", "")
+            if user:
+                subprocess.run(["git", "remote", "add", "origin", 
+                               f"https://github.com/{user}/{repo_name}.git"], 
+                              capture_output=True, cwd=CWD)
+                return True
+            return False
+        return True
+    except:
+        return False
+
 def github_create_repo(name, private=False, description=""):
     ensure_git_identity()
     cmd = ["gh","repo","create",name,"--push"] + (["--private"] if private else ["--public"])
@@ -318,30 +334,89 @@ def github_create_repo(name, private=False, description=""):
         res = subprocess.run(cmd, capture_output=True, text=True, cwd=CWD)
         out = res.stdout.strip() or f"Repo {name} dibuat."
         user = os.getenv("GITHUB_USER","")
-        if user: subprocess.run(["git","remote","remove","origin"], capture_output=True, cwd=CWD); subprocess.run(["git","remote","add","origin", f"https://github.com/{user}/{name}.git"], capture_output=True, cwd=CWD)
+        if user: 
+            subprocess.run(["git","remote","remove","origin"], capture_output=True, cwd=CWD)
+            subprocess.run(["git","remote","add","origin", f"https://github.com/{user}/{name}.git"], capture_output=True, cwd=CWD)
         return out
     except Exception as e: return f"ERROR: {e}"
 
 def github_push(commit_msg="Update from Tagent"):
     try:
         ensure_git_identity()
-        repo = git.Repo(CWD)
-        # Pastikan .gitignore ada, jika tidak buat default
+        
+        # Cek apakah CWD adalah repo git
+        if not (CWD / ".git").exists():
+            return "ERROR: Direktori ini bukan repository Git. Gunakan github_create_repo dulu atau git init."
+        
+        # Cek submodule
+        gitmodules_path = CWD / ".gitmodules"
+        status_result = subprocess.run(["git", "status", "--porcelain"], 
+                                       capture_output=True, text=True, cwd=CWD)
+        status_lines = status_result.stdout.strip().split('\n') if status_result.stdout.strip() else []
+        
+        submodule_paths = []
+        for line in status_lines:
+            if line.strip():
+                parts = line.split()
+                if len(parts) >= 2:
+                    path = parts[-1].strip()
+                    full_path = CWD / path
+                    if full_path.is_dir() and (full_path / ".git").exists():
+                        submodule_paths.append(path)
+        
+        if submodule_paths:
+            warning = "⚠️ Terdeteksi folder yang merupakan repo git sendiri (submodule):\n"
+            for sp in submodule_paths:
+                warning += f"  - {sp}\n"
+            warning += "Tips: masuk ke folder tersebut dengan change_directory, lalu push dari sana.\n"
+            warning += "Atau hapus .git di dalamnya: rm -rf <folder>/.git"
+            return warning
+        
+        # .gitignore
         gitignore_path = CWD / ".gitignore"
         if not gitignore_path.exists():
             gitignore_path.write_text("node_modules/\n*.log\n.env\n__pycache__/\n")
-        if repo.is_dirty(untracked_files=True):
-            repo.git.add(A=True)
-            repo.index.commit(commit_msg)
-            subprocess.run(["git", "push", "-u", "origin", "HEAD"], check=True, capture_output=True, cwd=CWD)
-            return f"✅ Pushed: {commit_msg}"
-        return "Tidak ada perubahan."
+        
+        repo = git.Repo(CWD)
+        if not repo.is_dirty(untracked_files=True):
+            return "Tidak ada perubahan."
+        
+        repo.git.add(A=True)
+        repo.index.commit(commit_msg)
+        
+        repo_name = CWD.name
+        ensure_git_remote(repo_name)
+        
+        branch_result = subprocess.run(["git", "branch", "--show-current"], 
+                                      capture_output=True, text=True, cwd=CWD)
+        branch = branch_result.stdout.strip() or "main"
+        
+        push_result = subprocess.run(["git", "push", "-u", "origin", branch], 
+                                    capture_output=True, text=True, cwd=CWD)
+        if push_result.returncode != 0:
+            error_msg = push_result.stderr.strip()
+            # Coba ganti branch ke main jika master
+            if "master" in branch:
+                subprocess.run(["git", "branch", "-M", "main"], capture_output=True, cwd=CWD)
+                push_result2 = subprocess.run(["git", "push", "-u", "origin", "main"], 
+                                            capture_output=True, text=True, cwd=CWD)
+                if push_result2.returncode == 0:
+                    return f"✅ Pushed: {commit_msg} (branch: main)"
+            return f"ERROR push: {error_msg[:200]}"
+        
+        return f"✅ Pushed: {commit_msg} (branch: {branch})"
     except Exception as e:
         return f"ERROR: {str(e)[:200]}"
 
 def github_clone(repo_url, target_dir=""):
     cmd = ["gh","repo","clone",repo_url] + ([target_dir] if target_dir else [])
-    try: subprocess.run(cmd, check=True, capture_output=True, cwd=CWD); return f"Repo {repo_url} di-clone."
+    try: 
+        subprocess.run(cmd, check=True, capture_output=True, cwd=CWD)
+        if target_dir:
+            new_path = CWD / target_dir
+            if new_path.exists():
+                switch_project(target_dir)
+        return f"Repo {repo_url} di-clone."
     except Exception as e: return f"ERROR: {e}"
 
 LOG_DIR = CWD / "logs"; LOG_DIR.mkdir(exist_ok=True)
@@ -482,15 +557,15 @@ def edit_file(path, old_str, new_str, **kwargs):
     return f"✅ {path} diedit."
 
 tools_spec = [
-    {"type":"function","function":{"name":"change_directory","description":"Pindah direktori di dalam folder proyek.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+    {"type":"function","function":{"name":"change_directory","description":"Pindah ke folder proyek spesifik.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
     {"type":"function","function":{"name":"list_directory","description":"Lihat isi direktori.","parameters":{"type":"object","properties":{"path":{"type":"string","default":"."}}}}},
     {"type":"function","function":{"name":"shell_command","description":"Jalankan perintah shell.","parameters":{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}}},
     {"type":"function","function":{"name":"read_file","description":"Baca file.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
     {"type":"function","function":{"name":"write_file","description":"Tulis file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}},
     {"type":"function","function":{"name":"edit_file","description":"Edit file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_str":{"type":"string"},"new_str":{"type":"string"}},"required":["path","old_str","new_str"]}}},
-    {"type":"function","function":{"name":"github_create_repo","description":"Buat repo GitHub.","parameters":{"type":"object","properties":{"name":{"type":"string"},"private":{"type":"boolean","default":False},"description":{"type":"string","default":""}},"required":["name"]}}},
-    {"type":"function","function":{"name":"github_push","description":"Push ke GitHub.","parameters":{"type":"object","properties":{"commit_msg":{"type":"string","default":"Update from Tagent"}}}}},
-    {"type":"function","function":{"name":"github_clone","description":"Clone repo.","parameters":{"type":"object","properties":{"repo_url":{"type":"string"},"target_dir":{"type":"string","default":""}},"required":["repo_url"]}}},
+    {"type":"function","function":{"name":"github_create_repo","description":"Buat repo GitHub di folder proyek saat ini.","parameters":{"type":"object","properties":{"name":{"type":"string"},"private":{"type":"boolean","default":False},"description":{"type":"string","default":""}},"required":["name"]}}},
+    {"type":"function","function":{"name":"github_push","description":"Commit dan push perubahan ke GitHub. Pastikan sudah berada di folder proyek yang benar.","parameters":{"type":"object","properties":{"commit_msg":{"type":"string","default":"Update from Tagent"}}}}},
+    {"type":"function","function":{"name":"github_clone","description":"Clone repo ke folder proyek.","parameters":{"type":"object","properties":{"repo_url":{"type":"string"},"target_dir":{"type":"string","default":""}},"required":["repo_url"]}}},
     {"type":"function","function":{"name":"auto_run","description":"Jalankan proyek di tmux.","parameters":{"type":"object","properties":{"command":{"type":"string"},"project_name":{"type":"string"}},"required":["command","project_name"]}}},
     {"type":"function","function":{"name":"auto_stop","description":"Hentikan proyek.","parameters":{"type":"object","properties":{"project_name":{"type":"string"}},"required":["project_name"]}}},
     {"type":"function","function":{"name":"change_provider","description":"Ganti provider API/model.","parameters":{"type":"object","properties":{"provider":{"type":"string"},"api_key":{"type":"string"},"base_url":{"type":"string"},"model":{"type":"string"}}}}},
@@ -596,9 +671,15 @@ def run_agent():
     SYSTEM_PROMPT = f"""Kamu Tagent, AI Developer Agent di Termux.
 Folder proyek: {PROJECTS_DIR} (semua pekerjaan di sini)
 Proyek saat ini: {active_project or 'none'}
+
 Tools: baca/tulis/edit file, shell cmd, GitHub, auto_run/stop, change_provider.
-Kamu memiliki memory untuk setiap proyek (isi direktori & file). Gunakan `list_directory`/`read_file` hanya jika data belum ada di memory. Jangan ulangi operasi yang sudah dilakukan.
-Setelah semua alat selesai dieksekusi, berikan ringkasan singkat atau konfirmasi kepada pengguna.
+
+PENTING:
+- Sebelum push ke GitHub, PASTIKAN kamu sudah masuk ke folder proyek yang benar (gunakan change_directory ke folder proyeknya).
+- Jangan bekerja atau push dari folder proyek utama ({PROJECTS_DIR}), selalu masuk ke folder proyek spesifik.
+- Jika github_push gagal, cek apakah folder tersebut adalah submodule/repo git sendiri. Jika ya, masuk ke folder itu dulu baru push.
+- Kamu memiliki memory untuk setiap proyek. Jangan ulangi list_directory/read_file jika data sudah ada.
+- Setelah semua tugas selesai, berikan ringkasan singkat.
 Gunakan bahasa Indonesia ramah."""
 
     messages = [{"role":"system","content":SYSTEM_PROMPT}]
