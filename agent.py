@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 Tagent – Your AI Agent by Vicienna
-+ Safe Project Folder (default ~/proyek)
-+ Full Memory Cache, Tool Status Bar, Smart Analysis
++ Safe Project Folder, Full Memory Cache, Tool Status Bar,
++ Auto .gitignore, Smart Analysis
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading
@@ -49,13 +49,13 @@ def password_prompt(prompt_text="Password: "):
 
 console = Console()
 ENV_FILE = Path(__file__).parent / ".env"
-PROJECTS_DIR = None   # akan diisi dari setup/load_config
 CWD = Path.cwd()
+PROJECTS_DIR = None
 active_project = None
 tool_call_counter = {}
 DEVELOPER_MODE = False
 
-# ---------- PROJECT MEMORY ----------
+# ---------- PROJECT MEMORY (persistent cache) ----------
 PROJECT_MEMORY_DIR = Path(__file__).parent / "project_memories"
 PROJECT_MEMORY_DIR.mkdir(exist_ok=True)
 
@@ -163,7 +163,6 @@ def install_trigger():
 def run_setup():
     global PROJECTS_DIR
     console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard – Tagent[/]", border_style="bright_blue"))
-    # Provider
     providers = {
         "1":{"name":"OpenAI","base":"https://api.openai.com/v1","key_link":"https://platform.openai.com/api-keys"},
         "2":{"name":"OpenRouter","base":"https://openrouter.ai/api/v1","key_link":"https://openrouter.ai/keys"},
@@ -179,7 +178,6 @@ def run_setup():
     set_key(ENV_FILE, "API_PROVIDER", provider["name"])
     if choice=="5": set_key(ENV_FILE, "API_BASE_URL", Prompt.ask("Base URL").strip().rstrip('/'))
     else: set_key(ENV_FILE, "API_BASE_URL", provider["base"])
-    # Model
     if choice=="1": model = Prompt.ask("Model", default="gpt-4o")
     elif choice=="2":
         console.print("1. google/gemini-2.0-flash-001 (gratis)\n2. openai/gpt-4o\n3. anthropic/claude-3.5-sonnet\n4. Custom")
@@ -192,7 +190,6 @@ def run_setup():
     elif choice=="4": model = Prompt.ask("Nama model", default="nemotron-3-super:cloud")
     else: model = Prompt.ask("ID model")
     set_key(ENV_FILE, "MODEL", model)
-    # GitHub token
     gh_token = password_prompt("\n🔐 GitHub Token (opsional): ")
     if gh_token.strip():
         try:
@@ -204,12 +201,10 @@ def run_setup():
                 subprocess.run(["git","config","--global","user.name", data.get("name",data["login"])])
                 subprocess.run(["git","config","--global","user.email", data.get("email","")])
         except: pass
-    # Folder Proyek
     default_projects = str(Path.home() / "proyek")
     projects_dir = Prompt.ask("Folder proyek", default=default_projects)
     set_key(ENV_FILE, "PROJECTS_DIR", projects_dir)
     Path(projects_dir).mkdir(parents=True, exist_ok=True)
-    # Global command
     if Prompt.ask("Buat perintah global 'tagent'?", choices=["y","n"], default="y")=="y": install_trigger()
     console.print("[green]✅ Setup selesai![/]")
 
@@ -219,13 +214,10 @@ def load_config():
     if not os.getenv("API_KEY") and not os.getenv("API_PROVIDER","").startswith("Ollama"):
         run_setup()
         load_dotenv(ENV_FILE, override=True)
-    # Set project folder
     PROJECTS_DIR = Path(os.getenv("PROJECTS_DIR", str(Path.home() / "proyek"))).expanduser().resolve()
-    if not PROJECTS_DIR.exists():
-        PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
+    if not PROJECTS_DIR.exists(): PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     os.chdir(PROJECTS_DIR)
     CWD = PROJECTS_DIR
-    # GitHub user
     if not os.getenv("GITHUB_USER"):
         try:
             res = subprocess.run(["gh","api","user"], capture_output=True, text=True)
@@ -234,7 +226,6 @@ def load_config():
                 if login: set_key(ENV_FILE, "GITHUB_USER", login); os.environ["GITHUB_USER"] = login
         except: pass
     DEVELOPER_MODE = os.getenv("GITHUB_USER","").strip().lower()=="vicienna"
-    # Default project = nama folder proyek utama (biasanya 'proyek')
     switch_project(PROJECTS_DIR.name)
 
 # ---------- API ----------
@@ -335,12 +326,18 @@ def github_push(commit_msg="Update from Tagent"):
     try:
         ensure_git_identity()
         repo = git.Repo(CWD)
+        # Pastikan .gitignore ada, jika tidak buat default
+        gitignore_path = CWD / ".gitignore"
+        if not gitignore_path.exists():
+            gitignore_path.write_text("node_modules/\n*.log\n.env\n__pycache__/\n")
         if repo.is_dirty(untracked_files=True):
-            repo.git.add(A=True); repo.index.commit(commit_msg)
-            subprocess.run(["git","push","-u","origin","HEAD"], check=True, capture_output=True, cwd=CWD)
+            repo.git.add(A=True)
+            repo.index.commit(commit_msg)
+            subprocess.run(["git", "push", "-u", "origin", "HEAD"], check=True, capture_output=True, cwd=CWD)
             return f"✅ Pushed: {commit_msg}"
         return "Tidak ada perubahan."
-    except Exception as e: return f"ERROR: {e}"
+    except Exception as e:
+        return f"ERROR: {str(e)[:200]}"
 
 def github_clone(repo_url, target_dir=""):
     cmd = ["gh","repo","clone",repo_url] + ([target_dir] if target_dir else [])
@@ -399,14 +396,12 @@ def change_provider(provider=None, api_key=None, base_url=None, model=None):
 def change_directory(path):
     global CWD
     try:
-        # Pastikan tujuan adalah path absolut di dalam PROJECTS_DIR
         target = (CWD / path).resolve()
         if not str(target).startswith(str(PROJECTS_DIR)):
             return f"ERROR: Tidak bisa keluar dari folder proyek ({PROJECTS_DIR})."
         if not target.is_dir():
             return f"ERROR: {path} bukan direktori."
-        os.chdir(target)
-        CWD = target
+        os.chdir(target); CWD = target
         switch_project(target.name)
         return f"Pindah ke {CWD}"
     except Exception as e: return f"ERROR: {e}"
@@ -416,7 +411,6 @@ def list_directory(path="."):
     if not str(target).startswith(str(PROJECTS_DIR)):
         return f"ERROR: Tidak bisa keluar dari folder proyek."
     if not target.is_dir(): return f"ERROR: {path} bukan direktori."
-    # Cek cache
     cached = get_cached_dir(target)
     if cached: return cached["entries"]
     try: items = os.listdir(target)
@@ -438,7 +432,6 @@ def shell_command(cmd):
         out = (res.stdout+res.stderr).strip()
         if not out: return "(ok)"
         if "command not found" in out: return f"ERROR: Perintah tidak ditemukan. Coba busybox {cmd}"
-        # Invalidate cache untuk direktori saat ini
         invalidate_cache_for(CWD)
         save_project_memory(active_project, current_tasks, current_history, current_dir_cache, current_file_cache)
         return out
@@ -473,7 +466,7 @@ def edit_file(path, old_str, new_str, **kwargs):
     full = (CWD / path).resolve()
     if not str(full).startswith(str(PROJECTS_DIR)):
         return f"ERROR: File di luar folder proyek."
-    content = read_file(path)  # sudah ada cek path
+    content = read_file(path)
     search = old_str
     if search not in content:
         for key in ["old_string","old","find","search"]:
@@ -533,7 +526,6 @@ def execute_tool_chain(messages, initial_tool_calls):
             if func_name == "auto_run":
                 project = args.get("project_name")
                 if project: threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
-        # Loop lanjutan
         for _ in range(5):
             status.update("[bold cyan]🤖 Meminta respons AI...[/]")
             resp = chat_completion_nonstream(messages, tools_spec)
@@ -565,8 +557,8 @@ def execute_tool_chain(messages, initial_tool_calls):
                     console.print(Panel(Syntax(str(result),"text",theme="monokai"), title=f"📤 {func_name}"))
                     messages.append({"role":"tool","tool_call_id":tc.get("id","manual"),"name":func_name,"content":str(result)})
             else:
-                return messages, msg.get("content")
-    return messages, None
+                return messages, msg.get("content") or "✅ Semua tugas selesai."
+    return messages, "⚠️ Terjadi kendala, tetapi beberapa tugas mungkin sudah selesai."
 
 # ---------- DISPLAY STREAMING + TIMER ----------
 def display_stream(messages):
@@ -606,6 +598,7 @@ Folder proyek: {PROJECTS_DIR} (semua pekerjaan di sini)
 Proyek saat ini: {active_project or 'none'}
 Tools: baca/tulis/edit file, shell cmd, GitHub, auto_run/stop, change_provider.
 Kamu memiliki memory untuk setiap proyek (isi direktori & file). Gunakan `list_directory`/`read_file` hanya jika data belum ada di memory. Jangan ulangi operasi yang sudah dilakukan.
+Setelah semua alat selesai dieksekusi, berikan ringkasan singkat atau konfirmasi kepada pengguna.
 Gunakan bahasa Indonesia ramah."""
 
     messages = [{"role":"system","content":SYSTEM_PROMPT}]
@@ -613,7 +606,6 @@ Gunakan bahasa Indonesia ramah."""
     os.system('clear')
     console.print("[dim]Memeriksa update...[/]"); check_and_update(); time.sleep(1); os.system('clear')
 
-    # Banner
     banner_text = Text()
     banner_text.append("🤖  T A G E N T  🤖\n\n", style="bold white on blue")
     banner_text.append("Creator : Vicienna\n", style="cyan")
@@ -628,7 +620,6 @@ Gunakan bahasa Indonesia ramah."""
 
     while True:
         tool_call_counter.clear()
-        # Auto-fix
         try:
             proj, err = error_queue.get_nowait()
             console.print(Panel(f"[red]🐛 Error di {proj}![/]\n{err[:500]}", title="Auto Monitor"))
@@ -673,7 +664,7 @@ Gunakan bahasa Indonesia ramah."""
                 if final_content:
                     console.print(Panel(Markdown(final_content), title="🤖 Tagent", border_style="green"))
                 else:
-                    console.print("[dim]✅ Selesai.[/]")
+                    console.print("[dim]✅ Semua tugas selesai.[/]")
             except KeyboardInterrupt:
                 console.print("\n[red]⚠ Dibatalkan.[/]"); continue
         else:
