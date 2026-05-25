@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tagent v2.1 – Your AI Agent by Vicienna
-+ Fixed GitHub Operations (Submodule detection, Remote handling, Branch normalization)
-+ Upgraded Memory System (JSON locking, Corruption recovery, Auto-save)
-+ Enhanced Security (Path traversal protection)
-+ Better Error Handling & Logging
+Tagent v2.2 – Your AI Agent by Vicienna
++ Fixed GitHub Operations (Create folder if not exists)
++ Upgraded Memory System (Persistent & Robust)
++ Fixed Shell Command Path Issues
++ Enhanced Stability & Loop Prevention
 """
 
 import os, sys, subprocess, json, time, hashlib, queue, threading, fcntl
@@ -26,7 +26,6 @@ from dotenv import load_dotenv, set_key
 # ---------- Configuration & Globals ----------
 console = Console()
 ENV_FILE = Path(__file__).parent / ".env"
-CWD = Path.cwd()
 PROJECTS_DIR = None
 active_project = None
 tool_call_counter = {}
@@ -77,7 +76,7 @@ def add_session_message(role, content):
 def get_session_context():
     if not session_messages:
         return ""
-    last_msgs = session_messages[-10:] # Ambil 10 terakhir saja untuk efisiensi
+    last_msgs = session_messages[-10:]
     context = "🗂 Context Sesi Terbaru:\n"
     for m in last_msgs:
         role_icon = "👤" if m["role"] == "user" else "🤖" if m["role"] == "assistant" else "🔧"
@@ -99,12 +98,10 @@ def load_project_memory(project_name):
     file = get_project_memory_file(project_name)
     if file and file.exists():
         try:
-            # Basic lock read
             with open(file, 'r') as f:
                 fcntl.flock(f, fcntl.LOCK_SH)
                 data = json.load(f)
                 fcntl.flock(f, fcntl.LOCK_UN)
-            
             return (
                 data.get("tasks", []),
                 data.get("history", []),
@@ -115,7 +112,6 @@ def load_project_memory(project_name):
             )
         except Exception as e:
             console.print(f"[yellow]⚠️ Warning: Memory corrupt for {project_name}, resetting.[/]")
-            # Backup corrupt file
             try: file.rename(file.with_suffix(".json.bak"))
             except: pass
     return [], [], {}, {}, {}, ""
@@ -124,7 +120,6 @@ def save_project_memory(project_name, tasks=None, history=None, dir_cache=None, 
     if not project_name: return
     file = get_project_memory_file(project_name)
     
-    # Load existing first to merge
     existing = {}
     if file.exists():
         try:
@@ -134,7 +129,6 @@ def save_project_memory(project_name, tasks=None, history=None, dir_cache=None, 
                 fcntl.flock(f, fcntl.LOCK_UN)
         except: existing = {}
 
-    # Update fields
     if tasks is not None: existing["tasks"] = tasks
     if history is not None: existing["history"] = history
     if dir_cache is not None: existing["dir_cache"] = dir_cache
@@ -142,7 +136,6 @@ def save_project_memory(project_name, tasks=None, history=None, dir_cache=None, 
     if last_modified is not None: existing["last_modified"] = last_modified
     if github_remote is not None: existing["github_remote"] = github_remote
 
-    # Write with lock
     try:
         with open(file, 'w') as f:
             fcntl.flock(f, fcntl.LOCK_EX)
@@ -164,15 +157,12 @@ current_github_remote = ""
 def switch_project(project_name):
     global active_project, current_tasks, current_history, current_dir_cache, current_file_cache, current_last_modified, current_github_remote, session_active_project
     
-    # Save previous project state before switching
     if active_project and active_project != project_name:
         save_project_memory(active_project, current_tasks, current_history,
                             current_dir_cache, current_file_cache, current_last_modified, current_github_remote)
     
     active_project = project_name
     session_active_project = project_name
-    
-    # Load new project state
     current_tasks, current_history, current_dir_cache, current_file_cache, current_last_modified, current_github_remote = load_project_memory(project_name)
     
     add_session_message("system", f"📂 Switched to project: {project_name}")
@@ -187,7 +177,7 @@ def cache_dir(path, entries):
     try:
         rel = str(Path(path).relative_to(PROJECTS_DIR))
         current_dir_cache[rel] = {"entries": entries, "time": time.time()}
-    except ValueError: pass # Path not relative to PROJECTS_DIR
+    except ValueError: pass
 
 def cache_file(path, content):
     try:
@@ -258,7 +248,7 @@ def install_trigger():
 
 def run_setup():
     global PROJECTS_DIR, session_github_user
-    console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard – Tagent v2.1[/]", border_style="bright_blue"))
+    console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard – Tagent v2.2[/]", border_style="bright_blue"))
     
     providers = {
         "1":{"name":"OpenAI","base":"https://api.openai.com/v1","key_link":"https://platform.openai.com/api-keys"},
@@ -287,9 +277,9 @@ def run_setup():
         mc = Prompt.ask("Pilih", choices=["1","2","3","4"], default="1")
         model = {"1":"google/gemini-2.0-flash-001","2":"openai/gpt-4o","3":"anthropic/claude-3.5-sonnet"}.get(mc) or Prompt.ask("ID model")
     elif choice=="3":
-        console.print("1. llama-3.1-70b-versatile\n2. mixtral-8x7b-32768\n3. gemma2-9b-it\n4. Custom")
-        mc = Prompt.ask("Pilih", choices=["1","2","3","4"], default="1")
-        model = {"1":"llama-3.1-70b-versatile","2":"mixtral-8x7b-32768","3":"gemma2-9b-it"}.get(mc) or Prompt.ask("ID model")
+        console.print("1. llama-3.1-8b-instant\n2. llama-3.1-70b-versatile\n3. mixtral-8x7b-32768\n4. gemma2-9b-it\n5. Custom")
+        mc = Prompt.ask("Pilih", choices=["1","2","3","4","5"], default="1")
+        model = {"1":"llama-3.1-8b-instant","2":"llama-3.1-70b-versatile","3":"mixtral-8x7b-32768","4":"gemma2-9b-it"}.get(mc) or Prompt.ask("ID model")
     elif choice=="4": model = Prompt.ask("Nama model Ollama", default="llama3")
     else: model = Prompt.ask("ID model")
     
@@ -298,7 +288,6 @@ def run_setup():
     gh_token = password_prompt("\n🔐 GitHub Token (opsional, tekan Enter untuk skip): ")
     if gh_token.strip():
         try:
-            # Login via GH CLI
             subprocess.run(["gh","auth","login","--with-token"], input=gh_token, text=True, capture_output=True, check=True)
             user_res = subprocess.run(["gh","api","user"], capture_output=True, text=True)
             if user_res.returncode==0:
@@ -307,10 +296,9 @@ def run_setup():
                 os.environ["GITHUB_USER"] = data["login"]
                 session_github_user = data["login"]
                 
-                # Set Git Config Global
                 subprocess.run(["git","config","--global","user.name", data.get("name", data["login"])])
                 subprocess.run(["git","config","--global","user.email", data.get("email", "user@github.com")])
-                console.print(f"[green]✓ Login GitHub berhasil作为: {data['login']}[/]")
+                console.print(f"[green]✓ Login GitHub berhasil sebagai: {data['login']}[/]")
         except Exception as e: 
             console.print(f"[yellow]⚠ GitHub Login Gagal: {e}[/]")
             
@@ -326,12 +314,11 @@ def run_setup():
     sys.exit(0)
 
 def load_config():
-    global DEVELOPER_MODE, PROJECTS_DIR, CWD, active_project, session_github_user
+    global DEVELOPER_MODE, PROJECTS_DIR, active_project, session_github_user
     global current_tasks, current_history, current_dir_cache, current_file_cache, current_last_modified, current_github_remote
     
     if ENV_FILE.exists(): load_dotenv(ENV_FILE)
     
-    # Check if setup is needed
     if not os.getenv("API_KEY") and not os.getenv("API_PROVIDER","").startswith("Ollama"):
         run_setup()
         load_dotenv(ENV_FILE, override=True)
@@ -339,11 +326,8 @@ def load_config():
     PROJECTS_DIR = Path(os.getenv("PROJECTS_DIR", str(Path.home() / "proyek"))).expanduser().resolve()
     if not PROJECTS_DIR.exists(): PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     
-    # Change CWD to Projects Dir initially
     os.chdir(PROJECTS_DIR)
-    CWD = PROJECTS_DIR
     
-    # Ensure GitHub User is loaded
     if not os.getenv("GITHUB_USER"):
         try:
             res = subprocess.run(["gh","api","user"], capture_output=True, text=True)
@@ -359,9 +343,8 @@ def load_config():
         
     DEVELOPER_MODE = session_github_user.lower()=="vicienna"
     
-    # Initialize first project context
     switch_project(PROJECTS_DIR.name)
-    add_session_message("system", f"Tagent v2.1 Started. GitHub: {session_github_user or 'Guest'}")
+    add_session_message("system", f"Tagent v2.2 Started. GitHub: {session_github_user or 'Guest'}")
 
 # ---------- API HANDLING ----------
 def normalize_api_url(base):
@@ -375,6 +358,10 @@ def stream_chat_completion(messages, tools=None):
     provider = os.getenv("API_PROVIDER","")
     model = os.getenv("MODEL")
     
+    if not api_key and "Ollama" not in provider:
+        yield ('error', "❌ API Key tidak ditemukan. Jalankan setup ulang.")
+        return
+
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if "OpenRouter" in provider: 
         headers["HTTP-Referer"] = "http://localhost"
@@ -389,7 +376,9 @@ def stream_chat_completion(messages, tools=None):
     url = normalize_api_url(base_url)
     
     try:
-        resp = session.post(url, headers=headers, json=payload, stream=True, timeout=180)
+        # Tambahkan timeout yang jelas (connect=5s, read=60s)
+        resp = session.post(url, headers=headers, json=payload, stream=True, timeout=(5, 60))
+        
         if resp.status_code != 200: 
             yield ('error', f"HTTP {resp.status_code}: {resp.text[:300]}")
             return
@@ -407,7 +396,6 @@ def stream_chat_completion(messages, tools=None):
                     obj = json.loads(data_str)
                     delta = obj.get("choices",[{}])[0].get("delta",{})
                     
-                    # Handle Thinking/Reasoning Content (specific models)
                     reasoning = delta.get("reasoning") or delta.get("thinking") or delta.get("reasoning_content")
                     if reasoning: 
                         thinking += reasoning
@@ -434,6 +422,8 @@ def stream_chat_completion(messages, tools=None):
         if tool_calls: final_msg["tool_calls"] = tool_calls
         yield ('done', final_msg)
         
+    except requests.exceptions.Timeout:
+        yield ('error', "❌ Request timeout (60s). Server lambat merespons.")
     except requests.exceptions.RequestException as e: 
         yield ('error', f"Koneksi gagal: {e}")
 
@@ -497,7 +487,6 @@ def ensure_git_identity():
         email_set = reader.has_option("user","email")
         
         if not name_set or not email_set:
-            # Coba ambil dari GitHub API
             res = subprocess.run(["gh","api","user"], capture_output=True, text=True)
             if res.returncode == 0:
                 d = json.loads(res.stdout)
@@ -526,7 +515,6 @@ def ensure_git_remote(repo_name):
             origin = repo.remote('origin')
             current_url = list(origin.urls)[0]
             if current_url != expected_url:
-                # Update URL jika berbeda
                 origin.set_url(expected_url)
                 console.print(f"[dim]🔄 Updated remote origin URL[/]")
         else:
@@ -539,38 +527,48 @@ def ensure_git_remote(repo_name):
 
 def github_create_repo(name, private=False, description=""):
     ensure_git_identity()
+    # Perbaikan: Buat folder jika belum ada
+    repo_path = CWD / name
+    repo_path.mkdir(exist_ok=True)
+    
+    # Ganti ke folder repo
+    original_cwd = CWD
+    os.chdir(repo_path)
+    
+    # Init git
+    if not (repo_path / ".git").exists():
+        subprocess.run(["git", "init"], cwd=repo_path, capture_output=True)
+        subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_path, capture_output=True)
+    
+    # Create repo via GH CLI
     cmd = ["gh","repo","create",name,"--push"] + (["--private"] if private else ["--public"])
     if description: cmd.extend(["-d",description])
     
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, cwd=CWD)
+        res = subprocess.run(cmd, capture_output=True, text=True, cwd=repo_path)
         if res.returncode != 0:
-            # Cek jika repo sudah ada
             if "already exists" in res.stderr:
-                return f"⚠️ Repo '{name}' sudah ada. Pastikan folder lokal sesuai."
+                return f"⚠️ Repo '{name}' sudah ada di GitHub. Melanjutkan..."
             return f"ERROR: {res.stderr.strip()}"
             
         out = res.stdout.strip() or f"Repo {name} dibuat."
         
-        # Ensure remote is set correctly in memory
         user = session_github_user or os.getenv("GITHUB_USER","")
         if user:
             remote_url = f"https://github.com/{user}/{name}.git"
             current_github_remote = remote_url
-            save_project_memory(active_project, github_remote=current_github_remote)
+            # Switch project context ke folder repo baru
+            switch_project(name)
             
         add_session_message("tool", f"Repo GitHub dibuat: {name}")
         return out
-    except Exception as e: return f"ERROR: {e}"
+    except Exception as e: 
+        return f"ERROR: {e}"
+    finally:
+        # Kembali ke folder semula
+        os.chdir(original_cwd)
 
 def github_push(commit_msg="Update from Tagent"):
-    """
-    Fixed Push Logic:
-    1. Check if git repo.
-    2. Detect submodules (prevent pushing root if submodules have changes).
-    3. Add, Commit, Push.
-    4. Handle master/main branch naming.
-    """
     try:
         ensure_git_identity()
         
@@ -579,8 +577,7 @@ def github_push(commit_msg="Update from Tagent"):
         
         repo = git.Repo(CWD)
         
-        # 1. Deteksi Submodule
-        # Cara aman: cek jika ada folder di dalam yang memiliki .git
+        # Deteksi Submodule (folder dengan .git)
         submodule_warnings = []
         for item in CWD.iterdir():
             if item.is_dir() and (item / ".git").exists() and item.name != ".git":
@@ -592,37 +589,27 @@ def github_push(commit_msg="Update from Tagent"):
             warning += "Masuk ke folder tersebut (`change_directory`) dan push dari sana secara terpisah."
             return warning
 
-        # 2. Check Status
         if not repo.is_dirty(untracked_files=True): 
             return "✅ Tidak ada perubahan untuk di-push."
         
-        # 3. Add & Commit
         repo.git.add(A=True)
         repo.index.commit(commit_msg)
         
-        # 4. Ensure Remote
         repo_name = CWD.name
         success, msg = ensure_git_remote(repo_name)
         if not success: return f"ERROR Remote: {msg}"
         
-        # 5. Push
         branch = repo.active_branch.name
         
-        # Handle case dimana branch belum track remote
         try:
             repo.git.push("--set-upstream", "origin", branch)
         except git.exc.GitCommandError as e:
             stderr = str(e.stderr)
-            # Jika error karena branch name mismatch (master vs main)
             if "refs/heads/master" in stderr or "refs/heads/main" in stderr:
-                # Coba rename branch lokal ke main jika remote menolak
-                if branch != "main":
-                    console.print("[yellow]🔄 Mencoba rename branch ke 'main'...[/]")
-                    repo.git.branch("-M", "main")
-                    repo.git.push("--set-upstream", "origin", "main")
-                    branch = "main"
-                else:
-                    return f"ERROR Push: {stderr[:200]}"
+                console.print("[yellow]🔄 Mencoba rename branch ke 'main'...[/]")
+                repo.git.branch("-M", "main")
+                repo.git.push("--set-upstream", "origin", "main")
+                branch = "main"
             else:
                 return f"ERROR Push: {stderr[:200]}"
                 
@@ -644,7 +631,6 @@ def github_clone(repo_url, target_dir=""):
             if new_path.exists(): 
                 switch_project(target_dir)
         else:
-            # Extract repo name from URL
             repo_name = repo_url.split("/")[-1].replace(".git", "")
             if (CWD / repo_name).exists():
                 switch_project(repo_name)
@@ -654,7 +640,7 @@ def github_clone(repo_url, target_dir=""):
     except Exception as e: return f"ERROR: {e}"
 
 # ---------- LOGGING & MONITORING ----------
-LOG_DIR = CWD / "logs"
+LOG_DIR = PROJECTS_DIR / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 def auto_run(command, project_name):
@@ -662,7 +648,6 @@ def auto_run(command, project_name):
     subprocess.run(["tmux","kill-session","-t",project_name], capture_output=True)
     log = LOG_DIR / f"{project_name}.log"
     
-    # Use bash explicitly for better compatibility
     shell_cmd = f"bash -c '{command} 2>&1 | tee {log}'"
     subprocess.run(["tmux","new-session","-d","-s",project_name, shell_cmd])
     
@@ -691,9 +676,8 @@ def monitor_logs(project_name):
                     f.seek(last_pos)
                     new_data = f.read()
                 last_pos = cur_size
-                # Simple error detection
                 if any(k in new_data.lower() for k in ["traceback","error","fatal","exception"]): 
-                    error_queue.put((project_name, new_data[-500:])) # Ambil ekor error
+                    error_queue.put((project_name, new_data[-500:]))
         except: pass
 
 def show_log_panel(project_name, lines=10):
@@ -719,11 +703,15 @@ def change_provider(provider=None, api_key=None, base_url=None, model=None):
 def change_directory(path):
     global CWD
     try:
+        # Perbaikan: Buat direktori jika belum ada
         target = (CWD / path).resolve()
         
         # Security Check: Prevent escaping PROJECTS_DIR
         if not str(target).startswith(str(PROJECTS_DIR)):
             return f"ERROR: Akses ditolak. Tidak bisa keluar dari folder proyek ({PROJECTS_DIR})."
+        
+        # Buat folder jika tidak ada
+        target.mkdir(parents=True, exist_ok=True)
         
         if not target.is_dir(): 
             return f"ERROR: {path} bukan direktori."
@@ -760,15 +748,25 @@ def list_directory(path="."):
     
     entries = res.strip() or "Kosong"
     cache_dir(target, entries)
-    save_project_memory(active_project, dir_cache=current_dir_cache) # Async save recommended but sync here for simplicity
+    save_project_memory(active_project, dir_cache=current_dir_cache)
     return entries
 
 def shell_command(cmd):
     try:
-        # Determine shell
+        # Perbaikan: Konversi PosixPath ke string eksplisit
+        cwd_str = str(CWD.resolve())
+        # Gunakan shell eksplisit
         shell_exec = "/data/data/com.termux/files/usr/bin/bash" if "ANDROID_ROOT" in os.environ else "/bin/bash"
         
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=60, cwd=CWD, executable=shell_exec)
+        res = subprocess.run(
+            cmd, 
+            shell=True, 
+            capture_output=True, 
+            text=True, 
+            timeout=60, 
+            cwd=cwd_str, 
+            executable=shell_exec
+        )
         out = (res.stdout + res.stderr).strip()
         
         if not out: return "(ok)"
@@ -830,7 +828,6 @@ def edit_file(path, old_str, new_str, **kwargs):
     if content.startswith("ERROR"): return content
     
     search = old_str
-    # Fallback keys for older tool specs
     if search not in content:
         for key in ["old_string","old","find","search"]:
             if key in kwargs and kwargs[key] in content:
@@ -851,13 +848,13 @@ def edit_file(path, old_str, new_str, **kwargs):
 
 # ---------- TOOL DEFINITIONS ----------
 tools_spec = [
-    {"type":"function","function":{"name":"change_directory","description":"Pindah ke folder proyek spesifik.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
+    {"type":"function","function":{"name":"change_directory","description":"Pindah ke folder proyek spesifik. Akan membuat folder jika belum ada.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
     {"type":"function","function":{"name":"list_directory","description":"Lihat isi direktori.","parameters":{"type":"object","properties":{"path":{"type":"string","default":"."}}}}},
     {"type":"function","function":{"name":"shell_command","description":"Jalankan perintah shell (bash).","parameters":{"type":"object","properties":{"cmd":{"type":"string"}},"required":["cmd"]}}},
     {"type":"function","function":{"name":"read_file","description":"Baca konten file.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}}},
     {"type":"function","function":{"name":"write_file","description":"Tulis file baru atau timpa file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}}},
     {"type":"function","function":{"name":"edit_file","description":"Edit sebagian file.","parameters":{"type":"object","properties":{"path":{"type":"string"},"old_str":{"type":"string"},"new_str":{"type":"string"}},"required":["path","old_str","new_str"]}}},
-    {"type":"function","function":{"name":"github_create_repo","description":"Buat repo GitHub baru dan inisialisasi Git.","parameters":{"type":"object","properties":{"name":{"type":"string"},"private":{"type":"boolean","default":False},"description":{"type":"string","default":""}},"required":["name"]}}},
+    {"type":"function","function":{"name":"github_create_repo","description":"Buat repo GitHub baru dan inisialisasi Git. Akan membuat folder jika belum ada.","parameters":{"type":"object","properties":{"name":{"type":"string"},"private":{"type":"boolean","default":False},"description":{"type":"string","default":""}},"required":["name"]}}},
     {"type":"function","function":{"name":"github_push","description":"Commit dan push perubahan ke GitHub. Pastikan sudah di folder proyek yang benar.","parameters":{"type":"object","properties":{"commit_msg":{"type":"string","default":"Update from Tagent"}}}}},
     {"type":"function","function":{"name":"github_clone","description":"Clone repo GitHub ke folder proyek.","parameters":{"type":"object","properties":{"repo_url":{"type":"string"},"target_dir":{"type":"string","default":""}},"required":["repo_url"]}}},
     {"type":"function","function":{"name":"auto_run","description":"Jalankan perintah panjang di background (tmux).","parameters":{"type":"object","properties":{"command":{"type":"string"},"project_name":{"type":"string"}},"required":["command","project_name"]}}},
@@ -883,7 +880,6 @@ def execute_tool_chain(messages, initial_tool_calls):
                 try: args = json.loads(args)
                 except: args = {}
                 
-            # Loop prevention
             key = f"{func_name}:{json.dumps(args, sort_keys=True)}"
             tool_call_counter[key] = tool_call_counter.get(key,0)+1
             
@@ -898,20 +894,17 @@ def execute_tool_chain(messages, initial_tool_calls):
                     result = f"ERROR Execution: {e}"
                     
             console.print(f"[dim]🔧 Called: {func_name}[/]")
-            # Only print result panel if it's short, otherwise truncate
             res_display = str(result) if len(str(result)) < 500 else str(result)[:500] + "..."
             console.print(Panel(Syntax(res_display,"text",theme="monokai"), title=f"📤 Result: {func_name}"))
             
             messages.append({"role":"tool","tool_call_id":tc.get("id","manual"),"name":func_name,"content":str(result)})
             
-            # Special handling for auto_run monitoring
             if func_name == "auto_run":
                 project = args.get("project_name")
                 if project: 
                     threading.Thread(target=monitor_logs, args=(project,), daemon=True).start()
                     
-        # After executing initial tools, ask AI for next step or final answer
-        for _ in range(5): # Max 5 turns of tool chaining
+        for _ in range(5):
             status.update("[bold cyan]🤖 Waiting for AI decision...[/]")
             resp = chat_completion_nonstream(messages, tools_spec)
             
@@ -926,7 +919,6 @@ def execute_tool_chain(messages, initial_tool_calls):
                 for tc in msg["tool_calls"]:
                     pending.append(tc)
                     
-                # Execute this batch
                 while pending:
                     tc = pending.pop(0)
                     func_name = tc["function"]["name"]
@@ -959,7 +951,7 @@ def execute_tool_chain(messages, initial_tool_calls):
                 
     return messages, "⚠️ Batas iterasi tool tercapai."
 
-# ---------- DISPLAY STREAMING ----------
+# ---------- DISPLAY STREAMING + TIMER (IMPROVED) ----------
 def display_stream(messages):
     start = time.time()
     thinking = ""
@@ -967,14 +959,18 @@ def display_stream(messages):
     has_thinking = False
     final_msg = None
     first_content_time = None
+    last_update_time = start
     
     def render():
         elapsed = time.time()-start
         timer = f"⏱ {elapsed:.1f}s"
         panel_text = Text()
         
+        if elapsed > 10 and not has_thinking and not content:
+            panel_text.append("⚠️ Respons lambat (>10s)... ", style="bold yellow")
+            
         if has_thinking:
-            panel_text.append("🧠 Thinking Process (", style="bold cyan")
+            panel_text.append("🧠 Thinking (", style="bold cyan")
             panel_text.append(timer, style="bold magenta")
             panel_text.append(")\n", style="bold cyan")
             panel_text.append("─"*50+"\n", style="dim")
@@ -989,16 +985,22 @@ def display_stream(messages):
         return Panel(panel_text, border_style="blue", title="Streaming Response")
         
     try:
-        with Live(render(), refresh_per_second=8, vertical_overflow="visible") as live:
+        with Live(render(), refresh_per_second=4, vertical_overflow="visible") as live:
             for ev, data in stream_chat_completion(messages, tools_spec):
+                current_time = time.time()
+                
                 if ev == 'thinking': 
                     has_thinking = True
                     thinking += data
                     live.update(render())
                 elif ev == 'content':
-                    if not first_content_time: first_content_time = time.time()
+                    if not first_content_time: 
+                        first_content_time = current_time
+                        console.print(f"[dim]⚡ Time to First Token: {first_content_time - start:.2f}s[/]")
                     content += data
-                    live.update(render())
+                    if current_time - last_update_time > 0.2:
+                        live.update(render())
+                        last_update_time = current_time
                 elif ev == 'error': 
                     console.print(f"[red]{data}[/]")
                     return None, ""
@@ -1010,17 +1012,16 @@ def display_stream(messages):
         return None, ""
         
     end = time.time()
-    think_dur = (first_content_time or end)-start
     total_dur = end-start
     
     if has_thinking: 
-        console.print(f"[bold magenta]⏱ Thinking: {think_dur:.1f}s | Total: {total_dur:.1f}s[/]")
+        console.print(f"[bold magenta]⏱ Total Time: {total_dur:.1f}s[/]")
     else: 
-        console.print(f"[bold magenta]⏱ Response Time: {total_dur:.1f}s[/]")
+        console.print(f"[bold magenta]⏱ Total Time: {total_dur:.1f}s[/]")
         
     return final_msg, content
 
-# ---------- MAIN LOOP ----------
+# ---------- MAIN LOOP (FIXED MEMORY HANDLING) ----------
 def run_agent():
     global tool_call_counter, active_project, current_tasks, current_history
     global current_dir_cache, current_file_cache, current_last_modified, current_github_remote
@@ -1029,34 +1030,35 @@ def run_agent():
     load_config()
     model = os.getenv("MODEL","google/gemini-2.0-flash-001")
 
-    SYSTEM_PROMPT = f"""Kamu Tagent v2.1, AI Developer Agent canggih di Termux.
+    SYSTEM_PROMPT = f"""Kamu Tagent v2.2, AI Developer Agent di Termux.
 Folder Proyek Utama: {PROJECTS_DIR}
 Proyek Aktif Saat Ini: {active_project or 'none'}
 GitHub User: {session_github_user or 'Guest'}
 Mode Developer: {'✅' if DEVELOPER_MODE else '❌'}
 
+ATURAN MEMORI & KONTEKS:
+1. JANGAN PERNAH menyapa ulang ("Halo", "Siap bekerja") jika sedang dalam sesi percakapan yang berlanjut.
+2. Gunakan history percakapan (`current_history`) untuk memahami konteks perintah singkat seperti "ya", "lanjutkan", atau "coba lagi".
+3. Jika user menjawab "ya" terhadap tawaranmu sebelumnya, LANJUTKAN tindakan tersebut. Jangan restart.
+4. Ingat hasil perintah tool sebelumnya. Jika `github_create_repo` gagal, jangan coba push dulu, tapi perbaiki repo-nya.
+5. Jika user minta buat proyek baru:
+   - Gunakan `shell_command` untuk `mkdir nama_proyek`
+   - Gunakan `change_directory` ke folder itu (akan otomatis membuat folder jika belum ada)
+   - Gunakan `github_create_repo` di dalam folder itu
+   - Gunakan `write_file` untuk buat file utama
+   - Gunakan `github_push` untuk upload
+
 TOOLS TERSEDIA:
 - File: read_file, write_file, edit_file
-- Dir: list_directory, change_directory (WAJIB masuk folder proyek sebelum kerja)
-- Shell: shell_command (untuk install package, run script pendek)
-- Git/GitHub: github_create_repo, github_push, github_clone
-- Process: auto_run (untuk server long-running), auto_stop
+- Dir: list_directory, change_directory (akan buat folder jika tidak ada)
+- Shell: shell_command
+- Git/GitHub: github_create_repo (akan buat folder jika tidak ada), github_push, github_clone
+- Process: auto_run, auto_stop
 
-ATURAN PENTING:
-1. KEAMANAN PATH: Jangan pernah mengakses file di luar {PROJECTS_DIR}.
-2. GIT PUSH: Sebelum push, PASTIKAN kamu sudah `change_directory` ke folder proyek yang tepat. Jangan push dari root.
-3. SUBMODULE: Jika ada folder dengan .git di dalamnya, itu submodule. Masuk ke folder itu dulu sebelum push.
-4. MEMORY: Gunakan memory proyek untuk mengingat tugas jangka panjang.
-5. BAHASA: Gunakan Bahasa Indonesia yang ramah dan teknis.
+BAHASA: Indonesia, teknis, to-the-point."""
 
-Jika user minta buat proyek baru:
-1. Buat folder (shell_command mkdir).
-2. Masuk folder (change_directory).
-3. Init git & create repo (github_create_repo).
-"""
-
-    messages = [{"role":"system","content":SYSTEM_PROMPT}]
-
+    base_system_msg = {"role":"system","content":SYSTEM_PROMPT}
+    
     os.system('clear')
     console.print("[dim]Checking updates...[/]")
     check_and_update()
@@ -1064,32 +1066,25 @@ Jika user minta buat proyek baru:
     os.system('clear')
 
     banner_text = Text()
-    banner_text.append("🤖  T A G E N T  v2.1  🤖\n\n", style="bold white on blue")
-    banner_text.append("Creator : Vicienna\n", style="cyan")
-    banner_text.append("Source  : github.com/Vicienna/ai-agent\n", style="cyan")
-    banner_text.append("IG: ceena.dev  |  Discord: hallo.dev", style="cyan")
-    console.print(Panel(Align.center(banner_text), border_style="bright_cyan", padding=(1,2), title="Welcome", title_align="left"))
-
-    gh_ok = "✅" if check_github_auth() else "❌"
-    dev_ok = "✅" if DEVELOPER_MODE else "❌"
-    console.print(Panel(f"Provider: {os.getenv('API_PROVIDER')} | Model: {model} | GitHub: {gh_ok} | Dev: {dev_ok}\nFolder: {PROJECTS_DIR} | Proyek: {active_project}", border_style="blue"))
+    banner_text.append("🤖  T A G E N T  v2.2  🤖\n\n", style="bold white on blue")
+    banner_text.append(f"Active Project: {active_project}\n", style="cyan")
+    banner_text.append(f"GitHub: {session_github_user or 'Guest'} | Model: {model}", style="dim")
+    console.print(Panel(Align.center(banner_text), border_style="bright_cyan", padding=(1,2)))
 
     while True:
         tool_call_counter.clear()
         
-        # Check for async errors from monitored logs
         try:
             proj, err = error_queue.get_nowait()
-            console.print(Panel(f"[red]🐛 Error Detected in {proj}![/]\n{err[:500]}", title="Auto Monitor"))
-            current_tasks.append(f"Perbaiki error di {proj}: {err[:200]}")
+            console.print(Panel(f"[red]🐛 Error in {proj}![/]\n{err[:500]}", title="Auto Monitor"))
+            current_tasks.append(f"Fix error in {proj}")
             save_project_memory(active_project, tasks=current_tasks)
         except queue.Empty: pass
 
-        # Auto-fix mode if tasks exist
         if current_tasks:
             user_input = current_tasks.pop(0)
             save_project_memory(active_project, tasks=current_tasks)
-            console.print(f"[yellow]🔧 Auto‑fix Task: {user_input}[/]")
+            console.print(f"[yellow]🔧 Auto-task: {user_input}[/]")
         else:
             try: user_input = Prompt.ask("\n[bold green]▸[/]")
             except (KeyboardInterrupt, EOFError): 
@@ -1099,46 +1094,64 @@ Jika user minta buat proyek baru:
             if user_input.lower() in ["exit","quit","keluar"]: break
             if not user_input.strip(): continue
 
+        # --- MEMORY LOGIC FIX ---
         add_session_message("user", user_input)
-        use_memory = needs_memory(user_input, active_project)
+        
+        # Selalu gunakan memory project jika kita dalam proyek aktif, kecuali perintah umum
+        general_keywords = ["cuaca", "berita", "siapa kamu", "terima kasih"]
+        use_long_memory = True # Default true untuk kontinuitas
+        if any(k in user_input.lower() for k in general_keywords):
+            use_long_memory = False # Hanya untuk hal-hal umum
 
-        # Construct Message Context
-        if use_memory:
-            base_messages = [{"role":"system","content":SYSTEM_PROMPT}]
-            # Add recent history from project memory
-            for h in current_history[-20:]: base_messages.append(h)
-            base_messages.append({"role":"user","content":user_input})
+        messages_for_api = [base_system_msg]
+        
+        if use_long_memory:
+            # Ambil history dari disk/memory proyek (last 20 interactions)
+            for h in current_history[-20:]:
+                messages_for_api.append(h)
         else:
-            base_messages = [{"role":"system","content":SYSTEM_PROMPT}, {"role":"user","content":user_input}]
+            # Jika tidak relevan dengan proyek, cukup pakai session memory terakhir
+            recent_session = session_messages[-6:]
+            for m in recent_session:
+                if m['role'] != 'system':
+                    messages_for_api.append({"role": m['role'], "content": m['content']})
+        
+        messages_for_api.append({"role":"user","content":user_input})
+        # --- END MEMORY LOGIC ---
 
         final_msg, content = None, ""
         try: 
-            final_msg, content = display_stream(base_messages)
+            final_msg, content = display_stream(messages_for_api)
         except Exception as e: 
             console.print(f"[red]Stream error: {e}[/]")
             continue
             
         if final_msg is None: continue
 
-        add_session_message("assistant", content or "(tool calls)")
-
-        # Save to history if relevant
-        if use_memory:
+        add_session_message("assistant", content or "(tool execution)")
+        
+        if use_long_memory:
             current_history.append({"role":"user","content":user_input})
             current_history.append(final_msg)
             if len(current_history) > 40: current_history = current_history[-40:]
             save_project_memory(active_project, history=current_history)
 
-        # Handle Tool Calls
         if "tool_calls" in final_msg:
-            messages = base_messages + [final_msg]
+            execution_messages = list(messages_for_api) 
+            execution_messages.append(final_msg)
+            
             try:
-                messages, final_content = execute_tool_chain(messages, final_msg["tool_calls"])
+                execution_messages, final_content = execute_tool_chain(execution_messages, final_msg["tool_calls"])
+                
                 if final_content:
                     add_session_message("assistant", final_content)
-                    console.print(Panel(Markdown(final_content), title="🤖 Tagent Final", border_style="green"))
+                    console.print(Panel(Markdown(final_content), title="🤖 Tagent Result", border_style="green"))
+                    
+                    if use_long_memory:
+                        current_history.append({"role":"assistant","content":final_content})
+                        save_project_memory(active_project, history=current_history)
                 else:
-                    console.print("[dim]✅ Semua tugas tool selesai.[/]")
+                    console.print("[dim]✅ Tool execution finished.[/]")
             except KeyboardInterrupt:
                 console.print("\n[red]⚠ Dibatalkan.[/]")
                 continue
