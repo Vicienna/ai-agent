@@ -640,11 +640,12 @@ def github_clone(repo_url, target_dir=""):
     except Exception as e: return f"ERROR: {e}"
 
 # ---------- LOGGING & MONITORING ----------
-LOG_DIR = PROJECTS_DIR / "logs"
-LOG_DIR.mkdir(exist_ok=True)
+LOG_DIR = None   # Akan diinisialisasi setelah load_config() di run_agent()
 
 def auto_run(command, project_name):
-    global active_project
+    global active_project, LOG_DIR
+    if LOG_DIR is None:
+        return "ERROR: LOG_DIR belum diinisialisasi. Jalankan agent terlebih dahulu."
     subprocess.run(["tmux","kill-session","-t",project_name], capture_output=True)
     log = LOG_DIR / f"{project_name}.log"
     
@@ -663,6 +664,9 @@ def auto_stop(project_name):
 error_queue = queue.Queue()
 
 def monitor_logs(project_name):
+    global LOG_DIR
+    if LOG_DIR is None:
+        return
     log = LOG_DIR / f"{project_name}.log"
     if not log.exists(): return
     last_pos = 0
@@ -681,7 +685,8 @@ def monitor_logs(project_name):
         except: pass
 
 def show_log_panel(project_name, lines=10):
-    if not project_name: return
+    global LOG_DIR
+    if not project_name or LOG_DIR is None: return
     log = LOG_DIR / f"{project_name}.log"
     if not log.exists(): return
     try:
@@ -1025,9 +1030,13 @@ def display_stream(messages):
 def run_agent():
     global tool_call_counter, active_project, current_tasks, current_history
     global current_dir_cache, current_file_cache, current_last_modified, current_github_remote
-    global DEVELOPER_MODE, session_github_user, session_messages
+    global DEVELOPER_MODE, session_github_user, session_messages, LOG_DIR
 
     load_config()
+    # Inisialisasi LOG_DIR setelah PROJECTS_DIR sudah pasti terdefinisi
+    LOG_DIR = PROJECTS_DIR / "logs"
+    LOG_DIR.mkdir(exist_ok=True)
+
     model = os.getenv("MODEL","google/gemini-2.0-flash-001")
 
     SYSTEM_PROMPT = f"""Kamu Tagent v2.2, AI Developer Agent di Termux.
