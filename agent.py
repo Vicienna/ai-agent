@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Tagent v2.2.1 – Your AI Agent by Vicienna
-+ Fixed PROJECTS_DIR initialization timing error
+Tagent v2.2 – Your AI Agent by Vicienna
 + Fixed GitHub Operations (Create folder if not exists)
 + Upgraded Memory System (Persistent & Robust)
 + Fixed Shell Command Path Issues
@@ -28,10 +27,10 @@ from dotenv import load_dotenv, set_key
 console = Console()
 ENV_FILE = Path(__file__).parent / ".env"
 PROJECTS_DIR = None
+CWD = None  # <--- TAMBAHKAN: Current Working Directory global
 active_project = None
 tool_call_counter = {}
 DEVELOPER_MODE = False
-LOG_DIR = None # Inisialisasi awal disini, akan diatur nanti
 
 # ---------- Password Input Helper ----------
 def password_prompt(prompt_text="Password: "):
@@ -250,7 +249,7 @@ def install_trigger():
 
 def run_setup():
     global PROJECTS_DIR, session_github_user
-    console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard – Tagent v2.2.1[/]", border_style="bright_blue"))
+    console.print(Panel.fit("[bold cyan]🛠️  Setup Wizard – Tagent v2.2[/]", border_style="bright_blue"))
     
     providers = {
         "1":{"name":"OpenAI","base":"https://api.openai.com/v1","key_link":"https://platform.openai.com/api-keys"},
@@ -316,7 +315,7 @@ def run_setup():
     sys.exit(0)
 
 def load_config():
-    global DEVELOPER_MODE, PROJECTS_DIR, active_project, session_github_user, LOG_DIR
+    global DEVELOPER_MODE, PROJECTS_DIR, CWD, active_project, session_github_user
     global current_tasks, current_history, current_dir_cache, current_file_cache, current_last_modified, current_github_remote
     
     if ENV_FILE.exists(): load_dotenv(ENV_FILE)
@@ -328,11 +327,8 @@ def load_config():
     PROJECTS_DIR = Path(os.getenv("PROJECTS_DIR", str(Path.home() / "proyek"))).expanduser().resolve()
     if not PROJECTS_DIR.exists(): PROJECTS_DIR.mkdir(parents=True, exist_ok=True)
     
-    # Inisialisasi LOG_DIR setelah PROJECTS_DIR pasti ada
-    LOG_DIR = PROJECTS_DIR / "logs"
-    LOG_DIR.mkdir(exist_ok=True)
-    
     os.chdir(PROJECTS_DIR)
+    CWD = PROJECTS_DIR  # <--- TAMBAHKAN: Inisialisasi CWD
     
     if not os.getenv("GITHUB_USER"):
         try:
@@ -350,7 +346,7 @@ def load_config():
     DEVELOPER_MODE = session_github_user.lower()=="vicienna"
     
     switch_project(PROJECTS_DIR.name)
-    add_session_message("system", f"Tagent v2.2.1 Started. GitHub: {session_github_user or 'Guest'}")
+    add_session_message("system", f"Tagent v2.2 Started. GitHub: {session_github_user or 'Guest'}")
 
 # ---------- API HANDLING ----------
 def normalize_api_url(base):
@@ -382,6 +378,7 @@ def stream_chat_completion(messages, tools=None):
     url = normalize_api_url(base_url)
     
     try:
+        # Tambahkan timeout yang jelas (connect=5s, read=60s)
         resp = session.post(url, headers=headers, json=payload, stream=True, timeout=(5, 60))
         
         if resp.status_code != 200: 
@@ -532,16 +529,20 @@ def ensure_git_remote(repo_name):
 
 def github_create_repo(name, private=False, description=""):
     ensure_git_identity()
+    # Perbaikan: Buat folder jika belum ada
     repo_path = CWD / name
     repo_path.mkdir(exist_ok=True)
     
+    # Ganti ke folder repo
     original_cwd = CWD
     os.chdir(repo_path)
     
+    # Init git
     if not (repo_path / ".git").exists():
         subprocess.run(["git", "init"], cwd=repo_path, capture_output=True)
         subprocess.run(["git", "checkout", "-b", "main"], cwd=repo_path, capture_output=True)
     
+    # Create repo via GH CLI
     cmd = ["gh","repo","create",name,"--push"] + (["--private"] if private else ["--public"])
     if description: cmd.extend(["-d",description])
     
@@ -558,6 +559,7 @@ def github_create_repo(name, private=False, description=""):
         if user:
             remote_url = f"https://github.com/{user}/{name}.git"
             current_github_remote = remote_url
+            # Switch project context ke folder repo baru
             switch_project(name)
             
         add_session_message("tool", f"Repo GitHub dibuat: {name}")
@@ -565,6 +567,7 @@ def github_create_repo(name, private=False, description=""):
     except Exception as e: 
         return f"ERROR: {e}"
     finally:
+        # Kembali ke folder semula
         os.chdir(original_cwd)
 
 def github_push(commit_msg="Update from Tagent"):
@@ -576,6 +579,7 @@ def github_push(commit_msg="Update from Tagent"):
         
         repo = git.Repo(CWD)
         
+        # Deteksi Submodule (folder dengan .git)
         submodule_warnings = []
         for item in CWD.iterdir():
             if item.is_dir() and (item / ".git").exists() and item.name != ".git":
@@ -604,7 +608,7 @@ def github_push(commit_msg="Update from Tagent"):
         except git.exc.GitCommandError as e:
             stderr = str(e.stderr)
             if "refs/heads/master" in stderr or "refs/heads/main" in stderr:
-                console.print("[yellow]🔄 Mencoba rename branch ke 'main'...")
+                console.print("[yellow]🔄 Mencoba rename branch ke 'main'...[/]")
                 repo.git.branch("-M", "main")
                 repo.git.push("--set-upstream", "origin", "main")
                 branch = "main"
@@ -638,10 +642,14 @@ def github_clone(repo_url, target_dir=""):
     except Exception as e: return f"ERROR: {e}"
 
 # ---------- LOGGING & MONITORING ----------
+LOG_DIR = None   # Akan diinisialisasi setelah load_config() di run_agent()
+
 def auto_run(command, project_name):
-    global active_project
+    global active_project, LOG_DIR
+    if LOG_DIR is None:
+        return "ERROR: LOG_DIR belum diinisialisasi. Jalankan agent terlebih dahulu."
     subprocess.run(["tmux","kill-session","-t",project_name], capture_output=True)
-    log = LOG_DIR / f"{project_name}.log" # Gunakan LOG_DIR yang sudah diinisialisasi
+    log = LOG_DIR / f"{project_name}.log"
     
     shell_cmd = f"bash -c '{command} 2>&1 | tee {log}'"
     subprocess.run(["tmux","new-session","-d","-s",project_name, shell_cmd])
@@ -658,7 +666,10 @@ def auto_stop(project_name):
 error_queue = queue.Queue()
 
 def monitor_logs(project_name):
-    log = LOG_DIR / f"{project_name}.log" # Gunakan LOG_DIR yang sudah diinisialisasi
+    global LOG_DIR
+    if LOG_DIR is None:
+        return
+    log = LOG_DIR / f"{project_name}.log"
     if not log.exists(): return
     last_pos = 0
     while True:
@@ -676,7 +687,8 @@ def monitor_logs(project_name):
         except: pass
 
 def show_log_panel(project_name, lines=10):
-    if not project_name or not LOG_DIR: return # Tambahkan pengecekan LOG_DIR
+    global LOG_DIR
+    if not project_name or LOG_DIR is None: return
     log = LOG_DIR / f"{project_name}.log"
     if not log.exists(): return
     try:
@@ -698,11 +710,14 @@ def change_provider(provider=None, api_key=None, base_url=None, model=None):
 def change_directory(path):
     global CWD
     try:
+        # Perbaikan: Buat direktori jika belum ada
         target = (CWD / path).resolve()
         
+        # Security Check: Prevent escaping PROJECTS_DIR
         if not str(target).startswith(str(PROJECTS_DIR)):
             return f"ERROR: Akses ditolak. Tidak bisa keluar dari folder proyek ({PROJECTS_DIR})."
         
+        # Buat folder jika tidak ada
         target.mkdir(parents=True, exist_ok=True)
         
         if not target.is_dir(): 
@@ -717,6 +732,7 @@ def change_directory(path):
 def list_directory(path="."):
     target = (CWD / path).resolve()
     
+    # Security Check
     if not str(target).startswith(str(PROJECTS_DIR)): 
         return f"ERROR: Akses ditolak."
     if not target.is_dir(): 
@@ -744,7 +760,9 @@ def list_directory(path="."):
 
 def shell_command(cmd):
     try:
+        # Perbaikan: Konversi PosixPath ke string eksplisit
         cwd_str = str(CWD.resolve())
+        # Gunakan shell eksplisit
         shell_exec = "/data/data/com.termux/files/usr/bin/bash" if "ANDROID_ROOT" in os.environ else "/bin/bash"
         
         res = subprocess.run(
@@ -772,6 +790,7 @@ def shell_command(cmd):
 def read_file(path):
     full = (CWD / path).resolve()
     
+    # Security Check
     if not str(full).startswith(str(PROJECTS_DIR)): 
         return f"ERROR: File di luar folder proyek."
     if not full.is_file(): 
@@ -792,6 +811,7 @@ def read_file(path):
 def write_file(path, content):
     full = (CWD / path).resolve()
     
+    # Security Check
     if not str(full).startswith(str(PROJECTS_DIR)): 
         return f"ERROR: Tidak bisa menulis di luar folder proyek."
         
@@ -807,6 +827,7 @@ def write_file(path, content):
 def edit_file(path, old_str, new_str, **kwargs):
     full = (CWD / path).resolve()
     
+    # Security Check
     if not str(full).startswith(str(PROJECTS_DIR)): 
         return f"ERROR: File di luar folder proyek."
         
@@ -1011,12 +1032,16 @@ def display_stream(messages):
 def run_agent():
     global tool_call_counter, active_project, current_tasks, current_history
     global current_dir_cache, current_file_cache, current_last_modified, current_github_remote
-    global DEVELOPER_MODE, session_github_user, session_messages
+    global DEVELOPER_MODE, session_github_user, session_messages, LOG_DIR
 
-    load_config() # Panggil ini dulu untuk inisialisasi PROJECTS_DIR dan LOG_DIR
+    load_config()
+    # Inisialisasi LOG_DIR setelah PROJECTS_DIR sudah pasti terdefinisi
+    LOG_DIR = PROJECTS_DIR / "logs"
+    LOG_DIR.mkdir(exist_ok=True)
+
     model = os.getenv("MODEL","google/gemini-2.0-flash-001")
 
-    SYSTEM_PROMPT = f"""Kamu Tagent v2.2.1, AI Developer Agent di Termux.
+    SYSTEM_PROMPT = f"""Kamu Tagent v2.2, AI Developer Agent di Termux.
 Folder Proyek Utama: {PROJECTS_DIR}
 Proyek Aktif Saat Ini: {active_project or 'none'}
 GitHub User: {session_github_user or 'Guest'}
@@ -1052,7 +1077,7 @@ BAHASA: Indonesia, teknis, to-the-point."""
     os.system('clear')
 
     banner_text = Text()
-    banner_text.append("🤖  T A G E N T  v2.2.1  🤖\n\n", style="bold white on blue")
+    banner_text.append("🤖  T A G E N T  v2.2  🤖\n\n", style="bold white on blue")
     banner_text.append(f"Active Project: {active_project}\n", style="cyan")
     banner_text.append(f"GitHub: {session_github_user or 'Guest'} | Model: {model}", style="dim")
     console.print(Panel(Align.center(banner_text), border_style="bright_cyan", padding=(1,2)))
@@ -1083,17 +1108,20 @@ BAHASA: Indonesia, teknis, to-the-point."""
         # --- MEMORY LOGIC FIX ---
         add_session_message("user", user_input)
         
+        # Selalu gunakan memory project jika kita dalam proyek aktif, kecuali perintah umum
         general_keywords = ["cuaca", "berita", "siapa kamu", "terima kasih"]
-        use_long_memory = True
+        use_long_memory = True # Default true untuk kontinuitas
         if any(k in user_input.lower() for k in general_keywords):
-            use_long_memory = False
+            use_long_memory = False # Hanya untuk hal-hal umum
 
         messages_for_api = [base_system_msg]
         
         if use_long_memory:
+            # Ambil history dari disk/memory proyek (last 20 interactions)
             for h in current_history[-20:]:
                 messages_for_api.append(h)
         else:
+            # Jika tidak relevan dengan proyek, cukup pakai session memory terakhir
             recent_session = session_messages[-6:]
             for m in recent_session:
                 if m['role'] != 'system':
